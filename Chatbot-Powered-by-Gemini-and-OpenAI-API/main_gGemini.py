@@ -4,6 +4,10 @@ from dotenv import load_dotenv
 import streamlit as st
 import google.generativeai as gen_ai
 
+
+# from care_core import ask_llm, PATIENT_SYSTEM, FEEDBACK_SYSTEM, SCENARIOS
+# I will merge on main later on
+
 # Load environment variables
 load_dotenv()
 
@@ -54,7 +58,7 @@ for message in st.session_state.chat_session.history:
         st.markdown(message.parts[0])
 
 # Input field for user's message
-user_prompt = st.chat_input("Ask Chat Bot..")
+user_prompt = st.chat_input("Ask ChatBot..")
 if user_prompt:
     # Add user's message to chat and display it
     st.chat_message("user").markdown(user_prompt)
