@@ -195,7 +195,7 @@ if "started" not in st.session_state:
 # Mode Badge
 current_mode = st.session_state.get("mode", "Practice only")
 st.markdown(
-    f"**Mode:** {'Paractice + Feedback' if current_mode == 'Practice+Feedback' else 'Praciece Only'}"
+    f"**Mode:** {'Paractice + Feedback' if current_mode == 'Practice+Feedback' else 'Practice Only'}"
 )
 
 # Patient's 1st Prompt (if not created)
