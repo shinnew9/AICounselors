@@ -1,0 +1,15 @@
+
+# secrets
+.env
+*.env
+# venv
+.venv/
+.venv*/
+venv/
+# cache
+__pycache__/
+*.pyc
+# streamlit
+.streamlit/
+# logs
+logs/
