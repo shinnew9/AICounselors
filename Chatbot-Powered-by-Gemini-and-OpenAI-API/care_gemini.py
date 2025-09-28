@@ -5,7 +5,7 @@
 
 import os, re, json, uuid
 import streamlit as st
-import datetime as datetime
+from datetime import datetime
 
 from core.llm import gcall
 from core.scenarios import SCENARIOS
@@ -19,10 +19,9 @@ st.set_page_config(page_title="CARE-style Counselor Practice (Google Gemini AI)"
 
 
 # Session defaults
-if "mode" not in st.session_state:
-    st.session_state["mode"] = "Practice only"
-if "scenario" not in st.session_state:
-    st.session_state["scenario"] = list(SCENARIOS.keys())[0]
+st.session_state.setdefault("mode", "Practice only")
+st.session_state.setdefault("scenario", list(SCENARIOS.keys())[0])
+st.session_state.setdefault("phase", "practice")
 st.session_state.setdefault("started", False)
 st.session_state.setdefault("turn", 1)
 st.session_state.setdefault("patient_msgs", [])
@@ -34,35 +33,39 @@ st.session_state.setdefault("turn_labels", [])
 st.session_state.setdefault("session_id", str(uuid.uuid4()))
 
 def reset_session(preserve=True):
-    keep_mode = st.session_state["mode"]
-    keep_scn = st.session_state["scenario"]
-    st.session_state.clear()
-    st.session_state.update({
-        "mode": keep_mode, "scenario": keep_scn,
-        "started": True, "turn": 1,
-        "patient_msgs": [], "counselor_msgs": [],
-        "overall_feedback": None, "session_metrics": {},
-        "metrics_summary": {}, "turn_labels": [],
-        "session-id": str(uuid.uuid4()),
-    })
+    # 위젯이 가진 상태는 유지
+    keep = {
+        "mode":   st.session_state.get("mode", "Practice only"),
+        "scenario": st.session_state.get("scenario", list(SCENARIOS.keys())[0]),
+        "phase":  st.session_state.get("phase", "practice"),
+    }
 
+    # 위젯 키는 건드리지 않고, 우리 앱 내부 키만 초기화
+    for k in ["started","turn","patient_msgs","counselor_msgs",
+              "overall_feedback","session_metrics","metrics_summary",
+              "turn_labels","session_id"]:
+        if k in st.session_state:
+            del st.session_state[k]
+
+    st.session_state["started"] = True
+    st.session_state["turn"] = 1
+    st.session_state["patient_msgs"] = []
+    st.session_state["counselor_msgs"] = []
+    st.session_state["overall_feedback"] = None
+    st.session_state["session_metrics"] = {}
+    st.session_state["metrics_summary"] = {}
+    st.session_state["turn_labels"] = []
+    import uuid
+    st.session_state["session_id"] = str(uuid.uuid4())
 
 # Sidebar (directly bound to session keys)
 with st.sidebar:
     st.header("Session setup")
     st.selectbox(
-        "Patient Scenario",
-        list(SCENARIOS.keys()),
-        index=list(SCENARIOS.keys()).index(st.session_state["scenario"]),
-        key="scenario",
+        "Patient Scenario", list(SCENARIOS.keys()), key="scenario",
     )
     st.selectbox("Phase", ["pre","practice","post"], key="phase")
-    st.radio(
-        "Mode",
-        ["Practice only", "Practice + Feedback"],
-        index=(0 if st.session_state["mode"] == "Practice only" else 1),
-        key="mode"  # ← single source of truth
-    )
+    st.radio("Mode", ["Practice only", "Practice + Feedback"], key="mode")  # ← single source of truth)
     if st.button("Session Start / Reset", type="primary", use_container_width=True):
         reset_session()
         st.success("Session has started. First conversation will be generated.")
@@ -118,14 +121,18 @@ with col_chat:
         # store reply
         st.session_state["counselor_msgs"].append(user_reply.strip())
 
+
+
         # (A) turn labeling + log
         labs = label_turn_with_llm(gcall, user_reply.strip())
         st.session_state["turn_labels"].append(labs)
-        log_turn(st, user_reply.strip(), labs)
+        try:
+            log_turn(st, user_reply.strip(), labs)
+            st.session_state["metrics_summary"] = compute_session_skill_rates(st.session_state["turn_labels"])
+            log_session_snapshot(st)
+        except Exception as e:
+            st.warning(f"(logging skipped) {e}")
 
-        # (B) session aggregate + snapshot log
-        st.session_state["metrics_summary"] = compute_session_skill_rates(st.session_state["turn_labels"])
-        log_session_snapshot(st)
 
         # next patient turn
         nxt_prompt = (
