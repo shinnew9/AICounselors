@@ -5,6 +5,7 @@
 
 import os, re, json, uuid
 import streamlit as st
+import datetime as datetime
 
 from core.llm import gcall
 from core.scenarios import SCENARIOS
@@ -55,6 +56,7 @@ with st.sidebar:
         index=list(SCENARIOS.keys()).index(st.session_state["scenario"]),
         key="scenario",
     )
+    st.selectbox("Phase", ["pre","practice","post"], key="phase")
     st.radio(
         "Mode",
         ["Practice only", "Practice + Feedback"],
@@ -182,13 +184,25 @@ with col_fb:
         st.write(f"- Suggestions: {ms.get('Suggestions',0):.2f}")
 
 
-    with st.expander("Safety / Ethics Notice", expanded=False):
-        st.markdown(
-            "- This is an **educational simulator**, not diagnosis or therapy.\n"
-            "- In emergencies (risk of self- or other-harm), contact local emergency services, or **988** in the United States."
-        )
-
-    if st.button("End Session", use_container_width=True, key="btn_end"):
-        st.session_state["started"] = False
-        st.success("Session ended. Use Start / Reset to begin again.")
-        st.rerun()
+with st.expander("Self-efficacy (0–100)", expanded=False):
+    se_expl = st.slider("Exploration", 0, 100, 50, key="se_expl")
+    se_act  = st.slider("Action", 0, 100, 50, key="se_act")
+    se_mgmt = st.slider("Session Mgmt", 0, 100, 50, key="se_mgmt")
+    if st.button("Save self-efficacy", use_container_width=True):
+        import os, csv
+        os.makedirs("logs", exist_ok=True)
+        path = os.path.join("logs","seff.csv")
+        row = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "session_id": st.session_state["session_id"],
+            "phase": st.session_state.get("phase","practice"),
+            "mode": st.session_state["mode"],
+            "scenario": st.session_state["scenario"],
+            "Exploration": se_expl, "Action": se_act, "SessionMgmt": se_mgmt,
+        }
+        new = not os.path.exists(path)
+        with open(path,"a",newline="",encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=row.keys())
+            if new: w.writeheader()
+            w.writerow(row)
+        st.success("Saved.")

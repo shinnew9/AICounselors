@@ -1,7 +1,7 @@
-from .scenarios import SCNEARIOS
+from .scenarios import SCENARIOS
 
 def build_patient_system_prompt(scn_name: str)->str:
-    scn = SCNEARIOS[scn_name]
+    scn = SCENARIOS[scn_name]
     return f"""You are ROLE-PLAYING as a mental health seeker (patient).
 Background{scn['background']}
 
