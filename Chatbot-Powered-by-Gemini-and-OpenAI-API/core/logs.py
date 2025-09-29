@@ -1,3 +1,4 @@
+# core/logs.py
 import os, csv
 from datetime import datetime
 os.makedirs("logs", exist_ok=True)
@@ -10,9 +11,8 @@ def log_turn(st, counselor_text: str, labels: dict):
         "mode": st.session_state["mode"],
         "scenario": st.session_state["scenario"],
         "phase": st.session_state.get("phase", "practice"),
-        "turn_idx": len(st.session_state["counselor_msgs"]),
+        "turn_idx": len(st.session_state.get("counselor_msgs", [])),
         "text": counselor_text.replace("\n", " ").strip(),
-        # ← 전부 안전 접근으로! (누락 시 0)
         "empathy":       int(labels.get("empathy", 0)),
         "reflection":    int(labels.get("reflection", 0)),
         "validation":    int(labels.get("validation", 0)),
@@ -38,7 +38,7 @@ def log_session_snapshot(st):
         "mode": st.session_state["mode"],
         "scenario": st.session_state["scenario"],
         "phase": st.session_state.get("phase", "practice"),
-        "turns": len(st.session_state["counselor_msgs"]),
+        "turns": len(st.session_state.get("counselor_msgs", [])),
         "Empathy":       float(ms.get("Empathy", 0)),
         "Reflection":    float(ms.get("Reflection", 0)),
         "Open Questions":float(ms.get("Open Questions", 0)),
