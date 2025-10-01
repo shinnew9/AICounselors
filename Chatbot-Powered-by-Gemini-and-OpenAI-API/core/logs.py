@@ -54,3 +54,4 @@ def log_session_snapshot(st):
         if new:
             w.writeheader()
         w.writerow(row)
+s
