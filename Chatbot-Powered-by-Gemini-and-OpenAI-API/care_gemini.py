@@ -13,17 +13,31 @@ from core.prompts import build_patient_system_prompt, OVERALL_FEEDBACK_SYSTEM, b
 from core.metrics import label_turn_with_llm, compute_session_skill_rates, parse_session_metrics
 from core.logs import log_turn, log_session_snapshot
 
+
+
+# Configs
+PHASE_ORDER = ["pre", "practice", "post"]
+PHASE_LIMITS = {"pre":6, "practice": 10, "post": 6}   # counselor 
+
 RISK_PAT = re.compile(r"\b(suicide|kill myself|self[- ]harm|end it|overdose|hurt myself)\b", re.I)
 
 
-# SESSION SETUP
+
+# Session Defaults
 def setup_session_defaults():
     st.session_state.setdefault("participant_id", str(uuid.uuid4()))
     st.session_state.setdefault("session_id", str(uuid.uuid4()))
     st.session_state.setdefault("scenario", list(SCENARIOS.keys())[0])
+    
+    # Phased flow state
     st.session_state.setdefault("phase", "pre")  # 'pre' | 'practice' | 'post'
+    st.session_state.setdefault("turn_counts", {"pre":0, "practice":0, "post": 0})
+    st.session_state.setdefault("completed", {"pre": False, "practice": False, "post": False})
+
+    # Mode can only matter in "practice"
     st.session_state.setdefault("mode", "Practice only")  # 'Practice only' | 'Practice + Feedback'
 
+    # Run state
     st.session_state.setdefault("started", False)
     st.session_state.setdefault("patient_msgs", [])
     st.session_state.setdefault("counselor_msgs", [])
@@ -35,71 +49,158 @@ def setup_session_defaults():
     st.session_state.setdefault("reply_box", "")
 
 
-def reset_session():
-    # keep participant_id, scenario/phase/mode; reset the run
-    keep = {
-        "participant_id": st.session_state["participant_id"],
-        "scenario": st.session_state["scenario"],
-        "phase": st.session_state["phase"],
-        "mode": st.session_state["mode"],
-    }
-    for k in ["started", "patient_msgs", "counselor_msgs", "overall_feedback",
-              "session_metrics", "metrics_summary", "turn_labels", "_pending_send", "reply_box"]:
+def reset_run_state():
+    """Clear the chat/runtime (keeps scenario/phase/mode/ids)."""
+    for k in ["patient_msgs", "counselor_msgs", "overall_feedback",
+              "session_metrics", "metrics_summary", "turn_labels",
+               "_pending_send", "reply_box"]:
         st.session_state.pop(k, None)
-    st.session_state.update(keep)
-    st.session_state["started"] = True
-    st.session_state["session_id"] = str(uuid.uuid4())
+
+    st.session_state["patient_msgs"]     = []
+    st.session_state["counselor_msgs"]   = []
+    st.session_state["overall_feedback"] = None
+    st.session_state["session_metrics"]  = {}
+    st.session_state["metrics_summary"]  = {}
+    st.session_state["turn_labels"]      = []
+    st.session_state["_pending_send"]    = False
+    st.session_state["reply_box"]        = ""
 
 
-# UI BLOCKS
+def reset_all_and_start():
+    """Start full protocol from PRE, clearing counts & runtime."""
+    st.session_state["phase"]       = "pre"
+    st.session_state["turn_couts"]  = {"pre":0, "practice": 0, "post": 0}
+    st.session_state["completed"]   = {"pre": False, "practice": False, "post": False}
+    st.session_state["session_id"]  = str(uuid.uuid4())
+    st.session_state["started"]     = True
+    reset_run_state()
+
+
+def start_next_phase():
+    """Advance to next phase in PHASE_ORDER, resetting runtime."""
+    cur = st.session_state["phase"]
+    idx = PHASE_ORDER.index(cur)
+    if idx < len(PHASE_ORDER) - 1:
+        st.session_state["phase"] = PHASE_ORDER[idx+1]
+        # practice 
+        if st.session_state["phase"] != "practice":
+            st.session_state["mode"] = "Practice only"
+        reset_run_state()
+        st.session_state["session_id"] = str(uuid.uuid4())
+        st.rerun()
+
+
+# Helpers
+def _update_metrics_summary_from_labels():
+    """ core.metrics.compute_session_skill_rates() 가 snake_case 키를 반환하는 걸"""
+    rates = compute_session_skill_rates(st.session_state.get("turn_labels", []))
+    st.session_state["metrics_summary"] = {
+        "Empathy":          float(rates.get("empathy_rate", 0.0)),
+        "Reflection":       float(rates.get("reflection_rate", 0.0)),
+        "Open Questions":   float(rates.get("open_question_rate", 0.0)),
+        "Validation":       float(rates.get("validation_rate", 0.0)),
+        "Suggestion":       float(rates.get("suggestion_rate", 0.0)),
+    }
+
+
+# UI Helpers
 def render_sidebar():
     with st.sidebar:
         st.header("Session setup")
 
+        # Choosing the scenario
         st.selectbox("Patient Scenario", list(SCENARIOS.keys()), key="scenario")
-        st.selectbox("Phase", ["pre", "practice", "post"], key="phase")
-        st.radio("Mode", ["Practice only", "Practice + Feedback"], key="mode")
+        
+        # Phase is not freely selectable - show a read-only stepper instead
+        cur = st.session_state["phase"]
+        st.markdown("**Phase (locked order)**")
+        for p in PHASE_ORDER:
+            tag = "▶️" if p == cur else ("✅" if st.session_state["completed"].get(p) else "⏳")
+            st.write(f"{tag} '{p}' ㅡ {st.session_state['turn_counts'][p]}/{PHASE_LIMITS[p]} turns")
 
+        # Mode is available ONLY in practice
+        locked = (st.session_state["phase"] != "practice")
+        current_mode = st.session_state.get("mode", "Practice only")
+        idx = 0 if current_mode == "Practice only" else 1
+        
+        # Mode can be chose *only* during practice
+        sel = st.radio(
+                "Mode (only available in Practice)",
+                ["Practice only", "Practice + Feedback"],
+                index = idx,
+                key="mode_radio",
+                disabled = locked,  # (st.session_state["phase"] != "practice"),
+                help="Enable feedback only in Practice + Feedback during the practice"
+        )
+        if not locked:
+            st.session_state["mode"] = sel
+        else:
+            st.session_state["mode"] = "Practice only"
+
+        # Start / Reset protocol        
         if st.button("Session Start / Reset", type="primary", use_container_width=True):
-            reset_session()
-            st.success("Session started. First patient message will be generated.")
-            st.rerun()
+            reset_all_and_start()
+            st.success("Session started at PRE. First patient message will be geerated.")
+            st.rerun() 
 
-
+        # Advance button appears once current phase is complete
+        cur_done = st.session_state["completed"].get(cur)
+        if cur_done and cur != "post":
+            nxt = PHASE_ORDER[PHASE_ORDER.index(cur) +1]
+            if st.button(f"Continue to **(nxt)**", use_container_width=True):
+                start_next_phase()
+        
+        
+# UI: Header badges
 def render_header_badges():
     phase = st.session_state["phase"]
     mode = st.session_state["mode"]
-    feedback_enabled = (phase == "practice" and mode == "Practice + Feedback")
+    fb_on = (phase == "practice" and mode == "Practice + Feedback")
+    turns = st.session_state["turn_counts"][phase]
+    cap = PHASE_LIMITS[phase]
 
     st.title("CARE-style Counselor Practice (Google Gemini AI)")
     st.markdown(
         f"**Phase:** `{phase}`  |  "
         f"**Mode:** `{mode}`  |  "
-        f"**Feedback:** `{'ENABLED' if feedback_enabled else 'DISABLED'}`"
+        f"**Feedback:** `{'ENABLED' if fb_on else 'DISABLED'}` | "
+        f"**Turns:** {st.session_state['turn_counts'][phase]}/{PHASE_LIMITS[phase]}"
     )
     if phase in ("pre", "post"):
         st.caption("Measurement phase — feedback is disabled by design.")
-    elif feedback_enabled:
-        st.caption("Intervention phase — feedback is ENABLED (P+F).")
+    elif fb_on:
+        st.caption("Intervention phase — P+F (feedback is ENABLED).")
     else:
         st.caption("Intervention phase — Practice-only (no feedback).")
 
 
+# LLM: first patient message
 def ensure_first_patient():
     if not st.session_state["patient_msgs"]:
-        p = f"{build_patient_system_prompt(st.session_state['scenario'])}\n" \
-            f"Task: Start the conversation in 1–2 sentences about how you're feeling."
+        p = (
+            f"{build_patient_system_prompt(st.session_state['scenario'])}\n"
+            "Task: Start the conversation in 1–2 sentences about how you're feeling."
+        )
         with st.spinner("Generating the first patient message..."):
             first, _ = gcall(p, max_tokens=140, temperature=0.7)
         st.session_state["patient_msgs"].append(first)
 
 
+# Send handling (run BEFORE drawing inputs)
 def handle_pending_send():
     """Process a send event safely *before* drawing widgets to avoid key-collisions."""
     if not st.session_state.get("_pending_send"):
         return
 
     st.session_state["_pending_send"] = False
+
+    # turn cap check
+    ph = st.session_state["phase"]
+    cap = PHASE_LIMITS[ph]
+    if st.session_state["turn_counts"][ph] >= cap:
+        st.warning(f"{ph.upper()} phase is complete. Please procedd to the next phase form the sidebar.")
+        return
+
     text = (st.session_state.get("reply_box") or "").strip()
     if not text:
         st.warning("Please type a reply.")
@@ -115,8 +216,10 @@ def handle_pending_send():
     labs = label_turn_with_llm(gcall, text)
     st.session_state["turn_labels"].append(labs)
     try:
+        # be safe inside log_turn
         log_turn(st, text, labs)  # core/logs.py (ensure it uses labels.get to avoid KeyError)
-        st.session_state["metrics_summary"] = compute_session_skill_rates(st.session_state["turn_labels"])
+        _update_metrics_summary_from_labels()
+        # st.session_state["metrics_summary"] = compute_session_skill_rates(st.session_state["turn_labels"])
         log_session_snapshot(st)
     except Exception as e:
         st.warning(f"(logging skipped) {e}")
@@ -135,41 +238,54 @@ def handle_pending_send():
     except Exception as e:
         st.error(f"Patient generation failed: {e}")
 
+    # (4) increment turn & phase complete check
+    st.session_stats["turn_counts"][ph] += 1
+    if st.session_state["turn_counts"][ph] >= cap:
+        st.session_state["completed"][ph] = True
+        st.success(f"{ph.upper()} phase compelte. Use the sidebar to continue.")
+
     # clear input and rerun
     st.session_state["reply_box"] = ""
     st.rerun()
 
 
+# UI: Left Column (chat)
 def render_chat_column():
-    with st.container():
-        st.subheader("Conversation")
-        # history
-        for i, pmsg in enumerate(st.session_state["patient_msgs"]):
-            st.markdown(f"**Patient:** {pmsg}")
-            if i < len(st.session_state["counselor_msgs"]):
-                st.markdown(f"**You:** {st.session_state['counselor_msgs'][i]}")
+    st.subheader("Conversation")
 
-        # single input box
-        st.text_area("Your reply (1–5 sentences)", height=130, key="reply_box")
+    # history
+    for i, pmsg in enumerate(st.session_state["patient_msgs"]):
+        st.markdown(f"**Patient:** {pmsg}")
+        if i < len(st.session_state["counselor_msgs"]):
+            st.markdown(f"**You:** {st.session_state['counselor_msgs'][i]}")
 
-        def _trigger_send():
-            st.session_state["_pending_send"] = True
+    # input + buttons
+    st.text_area("Your reply (1–5 sentences)", height=130, key="reply_box")
 
-        c1, c2 = st.columns([1, 1])
-        c1.button("Send", type="primary", use_container_width=True, key="btn_send", on_click=_trigger_send)
-
-        # Feedback button enabled ONLY in practice + P+F
-        phase = st.session_state["phase"]
-        mode = st.session_state["mode"]
-        fb_enabled = (phase == "practice" and mode == "Practice + Feedback")
-        fb_click = c2.button(
-            "Feedback", use_container_width=True, key="btn_feedback",
-            disabled=not fb_enabled,
-            help="Enabled only during Practice phase in Practice + Feedback mode."
-        )
-        return fb_click
+    phase = st.session_state["phase"]
+    cap = PHASE_LIMITS[phase]
+    sent = st.session_state["turn_counts"][phase]
+    send_disabled = (set >= cap)
 
 
+    def _trigger_send():
+        st.session_state["_pending_send"] = True
+
+    c1, c2 = st.columns([1, 1])
+    c1.button("Send", type="primary", use_container_width=True, key="btn_send", on_click=_trigger_send, disabled=send_disabled)
+
+    # Feedback button enabled ONLY in practice + P+F
+    mode = st.session_state["mode"]
+    fb_enabled = (phase == "practice" and mode == "Practice + Feedback")
+    fb_click = c2.button(
+        "Feedback", use_container_width=True, key="btn_feedback",
+        disabled=not fb_enabled,
+        help="Enabled only during Practice phase in Practice + Feedback mode."
+    )
+    return fb_click
+
+
+# UI: Right Column (Feedback)
 def render_feedback_column(fb_click):
     st.subheader("Feedback / Summary")
 
@@ -214,6 +330,7 @@ def render_feedback_column(fb_click):
         st.write(f"- Suggestions: {ms.get('Suggestions', 0):.2f}")
 
 
+# UI: Self-efficacy (pre/post only) 
 def render_self_efficacy_if_needed():
     phase = st.session_state["phase"]
     if phase not in ("pre", "post"):
@@ -229,11 +346,13 @@ def render_self_efficacy_if_needed():
             row = {
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "participant_id": st.session_state["participant_id"],
-                "session_id": st.session_state["session_id"],
-                "phase": phase,
-                "mode": st.session_state["mode"],
-                "scenario": st.session_state["scenario"],
-                "Exploration": se_expl, "Action": se_act, "SessionMgmt": se_mgmt,
+                "session_id":     st.session_state["session_id"],
+                "phase":          phase,
+                "mode":           st.session_state["mode"],
+                "scenario":       st.session_state["scenario"],
+                "Exploration":    se_expl, 
+                "Action":         se_act, 
+                "SessionMgmt":    se_mgmt,
             }
             new = not os.path.exists(path)
             with open(path, "a", newline="", encoding="utf-8") as f:
@@ -274,3 +393,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
