@@ -16,13 +16,13 @@ from core.logs import log_turn, log_session_snapshot
 
 
 # Configs
-PHASE_ORDER = ["pre", "practice", "post"]
-PHASE_LIMITS = {"pre":6, "practice": 10, "post": 6}   # counselor turns per phase
+PHASE_ORDER = ["Pre", "Practice", "Post"]
+PHASE_LIMITS = {"Pre":6, "Practice": 10, "Post": 6}   # counselor turns per phase
 
 PHASE_SCENARIO = {
-    "pre": "Alex (35, holiday loneliness)",
-    "practice": "Veteran father (35, reunification barriers)",
-    "post": "Jane (young adult, low mood & self-esteem, family issues)"
+    "Pre": "Alex (35, holiday loneliness)",
+    "Practice": "Veteran father (35, reunification barriers)",
+    "Post": "Jane (young adult, low mood & self-esteem, family issues)"
 }
 
 RISK_PAT = re.compile(r"\b(suicide|kill myself|self[- ]harm|end it|overdose|hurt myself)\b", re.I)
@@ -34,15 +34,14 @@ def setup_session_defaults():
     st.session_state.setdefault("participant_id", str(uuid.uuid4()))
     st.session_state.setdefault("session_id", str(uuid.uuid4()))
     
-    
     # Phased flow state
-    st.session_state.setdefault("phase", "pre")  # 'pre' | 'practice' | 'post'
-    st.session_state.setdefault("turn_counts", {"pre":0, "practice":0, "post": 0})
-    st.session_state.setdefault("completed", {"pre": False, "practice": False, "post": False})
-    st.session_state.setdefault("scenario", list(SCENARIOS.keys())[0])
+    st.session_state.setdefault("phase", "Pre")  # 'pre' | 'practice' | 'post'
+    st.session_state.setdefault("turn_counts", {"Pre":0, "Practice":0, "Post": 0})
+    st.session_state.setdefault("completed", {"Pre": False, "Practice": False, "Post": False})
+    st.session_state.setdefault("scenario", PHASE_SCENARIO["Pre"])
     
     # Mode can only matter in "practice"
-    st.session_state.setdefault("mode", "Practice only")  # 'Practice only' | 'Practice + Feedback'
+    st.session_state.setdefault("mode_radio", "Practice only")  # 'Practice only' | 'Practice + Feedback'
 
     # Run state
     st.session_state.setdefault("started", False)
@@ -83,13 +82,11 @@ def force_phase_scenario():
 
 def reset_all_and_start():
     """Start full protocol from PRE, clearing counts & runtime."""
-    st.session_state["phase"]       = "pre"
-    st.session_state["turn_couts"]  = {"pre":0, "practice": 0, "post": 0}
-    st.session_state["completed"]   = {"pre": False, "practice": False, "post": False}
+    st.session_state["phase"]       = "Pre"
+    st.session_state["turn_couts"]  = {"Pre":0, "Practice": 0, "Post": 0}
+    st.session_state["completed"]   = {"Pre": False, "Practice": False, "Post": False}
     st.session_state["session_id"]  = str(uuid.uuid4())
     st.session_state["started"]     = True
-    # when phase is pre/post, the mode sticks to 'Practice only'
-    st.session_state["mode"]        = "Practice only"
     force_phase_scenario()
     reset_run_state()
 
@@ -100,12 +97,18 @@ def start_next_phase():
     idx = PHASE_ORDER.index(cur)
     if idx < len(PHASE_ORDER) - 1:
         st.session_state["phase"] = PHASE_ORDER[idx+1]
-        # practice 
-        if st.session_state["phase"] != "practice":
-            st.session_state["mode"] = "Practice only"
+        force_phase_scenario()
         reset_run_state()
         st.session_state["session_id"] = str(uuid.uuid4())
         st.rerun()
+
+
+def effective_mode() -> str:
+    return (
+        st.session_state.get("mode_radio", "Practice only")
+        if st.session_state.get("phase") == "Practice"
+        else "Practice only"
+    )
 
 
 # Helpers
@@ -117,8 +120,22 @@ def _update_metrics_summary_from_labels():
         "Reflection":       float(rates.get("reflection_rate", 0.0)),
         "Open Questions":   float(rates.get("open_question_rate", 0.0)),
         "Validation":       float(rates.get("validation_rate", 0.0)),
-        "Suggestion":       float(rates.get("suggestion_rate", 0.0)),
+        "Suggestions":       float(rates.get("suggestion_rate", 0.0)),
     }
+
+def build_input_hint() -> str:
+    """Phase/Mode에 맞춘 간단한 입력 가이드 (placeholder)."""
+    phase = st.session_state["phase"]
+    mode = effective_mode()
+    if phase == "Pre":
+        return "Reply in 1-3 short sentences. Prioritize empathy or a reflection; ask ONE open question; avoid advice."
+    elif phase == "Practice":
+        if mode == "Practice + Feedback":
+            return "Practice empathy + reflections + open questions. Hold back suggestions unless explicitly asked."
+        else:
+            return "Practice listening: use empathy or an open question. Keep it brief (1-3 sentences)."
+    else:  # Post
+        return "Final assessment: 1-3 short sentences. Show active listening; one open question max; avoid advice."
 
 
 # UI Helpers: Sidebar
@@ -126,9 +143,8 @@ def render_sidebar():
     with st.sidebar:
         st.header("Session setup")
 
-        # Choosing the scenario
-        st.selectbox("Patient Scenario", list(SCENARIOS.keys()), key="scenario")
-        
+        st.markdown(f"**Scenario (auto):** {st.session_state['scenario']}")
+    
         # Phase is not freely selectable - show a read-only stepper instead
         cur = st.session_state["phase"]
         st.markdown("**Phase (locked order)**")
@@ -138,15 +154,15 @@ def render_sidebar():
             
 
         # Mode is available ONLY in practice
-        disabled = (st.session_state["phase"] != "practice")
+        is_practice = (cur == 'practice')
         st.radio(
             "Mode (only available in Practice)",
             ["Practice only", "Practice + Feedback"],
-            key = "mode",
-            disabled = disabled,
+            key = "mode_radio",
+            disabled = is_practice,
             help = "Feedback is only available in Practice phase."
         )
-        if disabled:
+        if not is_practice:
             st.caption("Mode is locked outside Practice.")
 
         # Start / Reset protocol
@@ -165,27 +181,9 @@ def render_sidebar():
 # UI: Header badges
 def render_header_badges():
     phase = st.session_state["phase"]
-    mode = st.session_state["mode"]
-    fb_on = (phase == "practice" and mode == "Practice + Feedback")
-    turns = st.session_state["turn_counts"][phase]
-    cap = PHASE_LIMITS[phase]
-
-
-    # 상태 라벨
-    if phase in ("pre", "post"):
-        mode_label = ":gray[Practice only(locked)]"
-        fb_label = ":red[NOT AVAIALABLE]"
-        phase_hint = "Measurement phase - feedback is disabled by design."
-    else:
-        if mode == "Practice + Feedback":
-            mode_label = ":blue[Practice only(locked)]"
-            fb_label = ":green[ENABLED]"
-            phase_hint = "Intervention phase - Practice + Feedback (feedback is ENABLED)."
-        else:
-            mode_label = ":gray[Practice only]"
-            fb_label = ":gray[ENABLED]"
-            phase_hint = "Intervention phase - Practice-only (no feedback)."
-
+    mode = effective_mode()
+    fb_on = (phase == "Practice" and mode == "Practice + Feedback")
+    
 
     st.title("CARE-style Counselor Practice (Google Gemini AI)")
     st.markdown(
@@ -194,7 +192,7 @@ def render_header_badges():
         f"**Feedback:** `{'ENABLED' if fb_on else 'DISABLED'}`  |  "
         f"**Turns:** {st.session_state['turn_counts'][phase]}/{PHASE_LIMITS[phase]}"
     )
-    st.caption("Measurement phase - feedback is disabled by design." if phase in ("pre", "post")
+    st.caption("Measurement phase - feedback is disabled by design." if phase in ("Pre", "Post")
                 else ("Intervention phase - P+F (feedback is ENABLEd)." if fb_on 
                       else "Intervention phase - Practice-only (no feedback)."))
 
@@ -302,12 +300,11 @@ def render_chat_column():
               key="btn_send", on_click=_trigger_send, disabled=send_disabled)
 
     # Feedback button enabled ONLY in practice + P+F
-    mode        = st.session_state["mode"]
+    mode        = effective_mode()
     fb_enabled  = (phase == "practice" and mode == "Practice + Feedback")
-    fb_click    = c2.button(
-        "Feedback", use_container_width=True, key="btn_feedback",
-        disabled=not fb_enabled,
-        help="Enabled only during Practice phase in Practice + Feedback mode."
+    fb_click    = c2.button("Feedback", use_container_width=True, key="btn_feedback",
+                            disabled =not fb_enabled,
+                            help="Enabled only during Practice phase in Practice + Feedback mode."
     )
     return fb_click
 
@@ -317,7 +314,7 @@ def render_feedback_column(fb_click):
     st.subheader("Feedback / Summary")
 
     phase = st.session_state["phase"]
-    mode = st.session_state["mode"]
+    mode = effective_mode()
     feedback_enabled = (phase == "practice" and mode == "Practice + Feedback")
 
     if not feedback_enabled:
@@ -360,7 +357,7 @@ def render_feedback_column(fb_click):
 # UI: Self-efficacy (pre/post only) 
 def render_self_efficacy_if_needed():
     phase = st.session_state["phase"]
-    if phase not in ("pre", "post"):
+    if phase not in ("Pre", "Post"):
         return
 
     with st.expander("Self-efficacy (0–8)", expanded=False):
@@ -375,7 +372,7 @@ def render_self_efficacy_if_needed():
                 "participant_id": st.session_state["participant_id"],
                 "session_id":     st.session_state["session_id"],
                 "phase":          phase,
-                "mode":           st.session_state["mode"],
+                "mode":           effective_mode(),
                 "scenario":       st.session_state["scenario"],
                 "Exploration":    se_expl, 
                 "Action":         se_act, 
@@ -389,6 +386,12 @@ def render_self_efficacy_if_needed():
             st.success(f"Saved self-efficacy for {phase}.")
 
 
+            if phase == "Pre" and st.session_state["completed"].get("Pre"):
+                start_next_phase()
+                st.rerun()
+
+
+
 # MAIN
 def main():
     st.set_page_config(page_title="CARE-style Counselor Practice (Google Gemini AI)",
@@ -399,7 +402,7 @@ def main():
     render_sidebar()
 
     if not st.session_state["started"]:
-        st.info("Use the left sidebar to start at **pre**.")
+        st.info("Use the left sidebar to start at **Pre**.")
         return
 
     render_header_badges()

@@ -1,18 +1,28 @@
 # core/logs.py
 import os, csv
 from datetime import datetime
+
 os.makedirs("logs", exist_ok=True)
+
+
+def _effective_mode_from_state(st):
+    return(
+        st.session_state.get("mode_radio", "Practice only")
+        if st.session_state.get("phase") == "practice"
+        else "Practice only"
+    )
+
 
 def log_turn(st, counselor_text: str, labels: dict):
     path = os.path.join("logs", "turns.csv")
     row = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "session_id": st.session_state["session_id"],
-        "mode": st.session_state["mode"],
+        "mode": _effective_mode_from_state(st),
         "scenario": st.session_state["scenario"],
         "phase": st.session_state.get("phase", "practice"),
         "turn_idx": len(st.session_state.get("counselor_msgs", [])),
-        "text": counselor_text.replace("\n", " ").strip(),
+        "text": (counselor_text or "").replace("\n", " ").strip(),
         "empathy":       int(labels.get("empathy", 0)),
         "reflection":    int(labels.get("reflection", 0)),
         "validation":    int(labels.get("validation", 0)),
@@ -35,7 +45,7 @@ def log_session_snapshot(st):
     row = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "session_id": st.session_state["session_id"],
-        "mode": st.session_state["mode"],
+        "mode": _effective_mode_from_state(st),
         "scenario": st.session_state["scenario"],
         "phase": st.session_state.get("phase", "practice"),
         "turns": len(st.session_state.get("counselor_msgs", [])),
