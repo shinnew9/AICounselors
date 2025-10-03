@@ -195,7 +195,7 @@ def render_header_badges():
     st.caption("Measurement phase - feedback is disabled by design." if phase in ("Pre", "Post")
                 else ("Intervention phase - P+F (feedback is ENABLEd)." if fb_on 
                       else "Intervention phase - Practice-only (no feedback)."))
-
+    st.caption(f"Tip: {build_input_hint()}")
 
 
 # LLM: first patient message
@@ -277,6 +277,21 @@ def handle_pending_send():
 def render_chat_column():
     st.subheader("Conversation")
 
+    # Turn-by-turn history
+    patient = st.session_state["patient_msgs"]
+    counselor = st.session_state["counselor_msgs"]
+
+    for i, pmsg in enumerate(patient):
+        if i > 0:
+            st.divider()
+        st.markdown(f"**Turn {i+1}**")
+        st.markdown(f"**Patient:** {pmsg}")
+        if i < len(counselor):
+            st.markdown(f"**Patient:** {pmsg}")
+        else:
+            st.caption("Your reply goes below to complete this turn.")
+
+
     # history
     for i, pmsg in enumerate(st.session_state["patient_msgs"]):
         st.markdown(f"**Patient:** {pmsg}")
@@ -284,7 +299,9 @@ def render_chat_column():
             st.markdown(f"**You:** {st.session_state['counselor_msgs'][i]}")
 
     # input + buttons
-    st.text_area("Your reply (1–5 sentences)", height=130, key="reply_box")
+    st.text_area("Your reply (1–5 sentences)", 
+                 height=130, key="reply_box",
+                 placeholder = build_input_hint())
 
     phase = st.session_state["phase"]
     cap = PHASE_LIMITS[phase]
