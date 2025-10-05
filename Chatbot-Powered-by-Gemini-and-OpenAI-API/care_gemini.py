@@ -298,8 +298,9 @@ def render_chat_column():
         if i < len(st.session_state["counselor_msgs"]):
             st.markdown(f"**You:** {st.session_state['counselor_msgs'][i]}")
 
+
     # input + buttons
-    st.text_area("Your reply (1–5 sentences)", 
+    st.text_area("Your reply (1–3 sentences)", 
                  height=130, key="reply_box",
                  placeholder = build_input_hint())
 
@@ -313,14 +314,20 @@ def render_chat_column():
         st.session_state["_pending_send"] = True
 
     c1, c2 = st.columns([1, 1])
-    c1.button("Send", type="primary", use_container_width=True, 
-              key="btn_send", on_click=_trigger_send, disabled=send_disabled)
+    c1.button("Send", 
+              type="primary", 
+              use_container_width=True, 
+              key="btn_send", 
+              on_click=_trigger_send, 
+              disabled=send_disabled)
 
     # Feedback button enabled ONLY in practice + P+F
     mode        = effective_mode()
     fb_enabled  = (phase == "practice" and mode == "Practice + Feedback")
-    fb_click    = c2.button("Feedback", use_container_width=True, key="btn_feedback",
-                            disabled =not fb_enabled,
+    fb_click    = c2.button("Feedback", 
+                            use_container_width=True, 
+                            key="btn_feedback",
+                            disabled = not fb_enabled,
                             help="Enabled only during Practice phase in Practice + Feedback mode."
     )
     return fb_click
