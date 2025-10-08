@@ -1,204 +1,248 @@
-# CARE-style counselor practice (Gemini) — refactored with main()
-# Prereqs: pip install streamlit python-dotenv google-generativeai==0.3.2
-# Run:     streamlit run care_gemini.py
-# .env:    GOOGLE_API_KEY=AIza...
+# CARE-style counselor practice (Gemini)
+# Run: streamlit run care_gemini.py
 
-import os, re, uuid, csv
+import os, re, uuid, csv, json
 import streamlit as st
 from datetime import datetime
 
 from core.llm import gcall
-from core.scenarios import SCENARIOS
-from core.prompts import build_patient_system_prompt, OVERALL_FEEDBACK_SYSTEM, build_history
-from core.metrics import label_turn_with_llm, compute_session_skill_rates, parse_session_metrics
+from core.prompts import (
+    build_patient_system_prompt,
+    OVERALL_FEEDBACK_SYSTEM,
+    build_history,
+)
+from core.metrics import (
+    label_turn_with_llm,
+    compute_session_skill_rates,
+    parse_session_metrics,
+)
+from core.state_utils import (
+    effective_mode_from_state,   # <- no-arg
+    ensure_mode_consistency,     # <- no-arg
+    feedback_enabled,            # <- no-arg
+)
 from core.logs import log_turn, log_session_snapshot
 
-
-
-# Configs
+# -----------------------------
+# Config
+# -----------------------------
 PHASE_ORDER = ["Pre", "Practice", "Post"]
-PHASE_LIMITS = {"Pre":6, "Practice": 10, "Post": 6}   # counselor turns per phase
+PHASE_LIMITS = {"Pre": 6, "Practice": 10, "Post": 6}
 
 PHASE_SCENARIO = {
     "Pre": "Alex (35, holiday loneliness)",
     "Practice": "Veteran father (35, reunification barriers)",
-    "Post": "Jane (young adult, low mood & self-esteem, family issues)"
+    "Post": "Jane (young adult, low mood & self-esteem, family issues)",
 }
 
-RISK_PAT = re.compile(r"\b(suicide|kill myself|self[- ]harm|end it|overdose|hurt myself)\b", re.I)
+RISK_PAT = re.compile(
+    r"\b(suicide|kill myself|self[- ]harm|end it|overdose|hurt myself)\b", re.I
+)
 
+MICRO_FEEDBACK_SYSTEM = """
+You are a counseling supervisor. Given ONE counselor message and its micro-skill flags
+(empathy, reflection, validation, open_question, suggestion: 0/1), produce very concise micro feedback.
 
+Return STRICT JSON with fields:
+{
+  "strength_title": "Empathy|Reflection|Validation|Open Question|Listening",
+  "strength_note": "one short sentence (<=18 words) praising the best thing",
+  "feedback_title": "Questions|Validation|Empathy|Refocus|Suggesting",
+  "feedback_note": "one short sentence (<=18 words) with a concrete improvement tip",
+  "alt_response": "optional 1-2 sentences better rewrite; neutral tone"
+}
+Output JSON only.
+"""
 
-# Session Defaults
+# -----------------------------
+# Small helpers
+# -----------------------------
+def _clean_json_block(text: str) -> dict:
+    t = text.strip()
+    s, e = t.find("{"), t.rfind("}")
+    if s == -1 or e == -1:
+        return {}
+    try:
+        return json.loads(t[s:e + 1])
+    except Exception:
+        return {}
+
+def gen_micro_feedback(gcall_fn, counselor_text: str, labs: dict) -> dict:
+    flags = {
+        k: int(bool(labs.get(k, 0)))
+        for k in ["empathy", "reflection", "validation", "open_question", "suggestion"]
+    }
+    prompt = f"""{MICRO_FEEDBACK_SYSTEM}
+
+Counselor message:
+\"\"\"{counselor_text.strip()}\"\"\"
+
+Skill flags (0/1):
+{json.dumps(flags)}
+
+JSON:"""
+    out, _ = gcall_fn(prompt, max_tokens=220, temperature=0.3)
+    data = _clean_json_block(out) or {}
+    return {
+        "strength_title": data.get("strength_title", "Strengths"),
+        "strength_note": data.get("strength_note", "Good use of client-centered skill."),
+        "feedback_title": data.get("feedback_title", "Feedback"),
+        "feedback_note": data.get("feedback_note", "Try an open question to invite more detail."),
+        "alt_response": data.get("alt_response", ""),
+    }
+
+def _update_metrics_summary_from_labels():
+    rates = compute_session_skill_rates(st.session_state.get("turn_labels", [])) or {}
+    st.session_state["metrics_summary"] = {
+        "Empathy": float(rates.get("empathy_rate", 0.0)),
+        "Reflection": float(rates.get("reflection_rate", 0.0)),
+        "Open Questions": float(rates.get("open_question_rate", 0.0)),
+        "Validation": float(rates.get("validation_rate", 0.0)),
+        "Suggestions": float(rates.get("suggestion_rate", 0.0)),
+    }
+
+def build_input_hint() -> str:
+    phase = st.session_state.get("phase", "Practice")
+    mode = effective_mode_from_state()
+    if phase == "Pre":
+        return "Reply in 1–3 short sentences. Prioritize empathy or a reflection; ask ONE open question; avoid advice."
+    if phase == "Practice":
+        if mode == "Practice + Feedback":
+            return "Practice empathy/reflection/open questions. Hold suggestions unless explicitly asked."
+        return "Practice listening: use empathy or an open question. Keep it brief (1–3 sentences)."
+    return "Final assessment: 1–3 short sentences. Show active listening; one open question max; avoid advice."
+
+# -----------------------------
+# Session state
+# -----------------------------
 def setup_session_defaults():
     st.session_state.setdefault("participant_id", str(uuid.uuid4()))
     st.session_state.setdefault("session_id", str(uuid.uuid4()))
-    
-    # Phased flow state
-    st.session_state.setdefault("phase", "Pre")  # 'pre' | 'practice' | 'post'
-    st.session_state.setdefault("turn_counts", {"Pre":0, "Practice":0, "Post": 0})
+
+    st.session_state.setdefault("phase", "Pre")
+    st.session_state.setdefault("turn_counts", {"Pre": 0, "Practice": 0, "Post": 0})
     st.session_state.setdefault("completed", {"Pre": False, "Practice": False, "Post": False})
     st.session_state.setdefault("scenario", PHASE_SCENARIO["Pre"])
-    
-    # Mode can only matter in "practice"
-    st.session_state.setdefault("mode_radio", "Practice only")  # 'Practice only' | 'Practice + Feedback'
 
-    # Run state
+    st.session_state.setdefault("mode_radio", "Practice only")
+
     st.session_state.setdefault("started", False)
     st.session_state.setdefault("patient_msgs", [])
     st.session_state.setdefault("counselor_msgs", [])
+    st.session_state.setdefault("micro_fb", [])
     st.session_state.setdefault("overall_feedback", None)
-    st.session_state.setdefault("session_metrics", {})   # e.g., gap words/T_GAP
-    st.session_state.setdefault("metrics_summary", {})   # live aggregates
-    st.session_state.setdefault("turn_labels", [])       # list of per-turn dicts
-    st.session_state.setdefault("_pending_send", False)  # safe-send flag
+    st.session_state.setdefault("session_metrics", {})
+    st.session_state.setdefault("metrics_summary", {})
+    st.session_state.setdefault("turn_labels", [])
+    st.session_state.setdefault("_pending_send", False)
     st.session_state.setdefault("reply_box", "")
 
-
 def reset_run_state():
-    """Clear the chat/runtime (keeps scenario/phase/mode/ids)."""
-    for k in ["patient_msgs", "counselor_msgs", "overall_feedback",
-              "session_metrics", "metrics_summary", "turn_labels",
-               "_pending_send", "reply_box"]:
+    for k in [
+        "patient_msgs", "counselor_msgs", "overall_feedback", "session_metrics",
+        "metrics_summary", "turn_labels", "_pending_send", "reply_box", "micro_fb"
+    ]:
         st.session_state.pop(k, None)
 
-    st.session_state["patient_msgs"]     = []
-    st.session_state["counselor_msgs"]   = []
+    st.session_state["patient_msgs"] = []
+    st.session_state["counselor_msgs"] = []
     st.session_state["overall_feedback"] = None
-    st.session_state["session_metrics"]  = {}
-    st.session_state["metrics_summary"]  = {}
-    st.session_state["turn_labels"]      = []
-    st.session_state["_pending_send"]    = False
-    st.session_state["reply_box"]        = ""
-
+    st.session_state["session_metrics"] = {}
+    st.session_state["metrics_summary"] = {}
+    st.session_state["turn_labels"] = []
+    st.session_state["_pending_send"] = False
+    st.session_state["reply_box"] = ""
+    st.session_state["micro_fb"] = []
 
 def force_phase_scenario():
-    """Keep scenario in sync with current phase."""
     ph = st.session_state["phase"]
     want = PHASE_SCENARIO[ph]
     if st.session_state.get("scenario") != want:
         st.session_state["scenario"] = want
 
-
 def reset_all_and_start():
-    """Start full protocol from PRE, clearing counts & runtime."""
-    st.session_state["phase"]       = "Pre"
-    st.session_state["turn_couts"]  = {"Pre":0, "Practice": 0, "Post": 0}
-    st.session_state["completed"]   = {"Pre": False, "Practice": False, "Post": False}
-    st.session_state["session_id"]  = str(uuid.uuid4())
-    st.session_state["started"]     = True
+    st.session_state["phase"] = "Pre"
+    st.session_state["turn_counts"] = {"Pre": 0, "Practice": 0, "Post": 0}
+    st.session_state["completed"] = {"Pre": False, "Practice": False, "Post": False}
+    st.session_state["session_id"] = str(uuid.uuid4())
+    st.session_state["started"] = True
     force_phase_scenario()
     reset_run_state()
 
-
 def start_next_phase():
-    """Advance to next phase in PHASE_ORDER, resetting runtime."""
     cur = st.session_state["phase"]
     idx = PHASE_ORDER.index(cur)
     if idx < len(PHASE_ORDER) - 1:
-        st.session_state["phase"] = PHASE_ORDER[idx+1]
+        st.session_state["phase"] = PHASE_ORDER[idx + 1]
         force_phase_scenario()
         reset_run_state()
         st.session_state["session_id"] = str(uuid.uuid4())
         st.rerun()
 
-
-def effective_mode() -> str:
-    return (
-        st.session_state.get("mode_radio", "Practice only")
-        if st.session_state.get("phase") == "Practice"
-        else "Practice only"
-    )
-
-
-# Helpers
-def _update_metrics_summary_from_labels():
-    """ core.metrics.compute_session_skill_rates() 가 snake_case 키를 반환하는 걸"""
-    rates = compute_session_skill_rates(st.session_state.get("turn_labels", [])) or {}
-    st.session_state["metrics_summary"] = {
-        "Empathy":          float(rates.get("empathy_rate", 0.0)),
-        "Reflection":       float(rates.get("reflection_rate", 0.0)),
-        "Open Questions":   float(rates.get("open_question_rate", 0.0)),
-        "Validation":       float(rates.get("validation_rate", 0.0)),
-        "Suggestions":       float(rates.get("suggestion_rate", 0.0)),
-    }
-
-def build_input_hint() -> str:
-    """Phase/Mode에 맞춘 간단한 입력 가이드 (placeholder)."""
-    phase = st.session_state["phase"]
-    mode = effective_mode()
-    if phase == "Pre":
-        return "Reply in 1-3 short sentences. Prioritize empathy or a reflection; ask ONE open question; avoid advice."
-    elif phase == "Practice":
-        if mode == "Practice + Feedback":
-            return "Practice empathy + reflections + open questions. Hold back suggestions unless explicitly asked."
-        else:
-            return "Practice listening: use empathy or an open question. Keep it brief (1-3 sentences)."
-    else:  # Post
-        return "Final assessment: 1-3 short sentences. Show active listening; one open question max; avoid advice."
-
-
-# UI Helpers: Sidebar
+# -----------------------------
+# UI – Sidebar
+# -----------------------------
 def render_sidebar():
     with st.sidebar:
         st.header("Session setup")
-
         st.markdown(f"**Scenario (auto):** {st.session_state['scenario']}")
-    
-        # Phase is not freely selectable - show a read-only stepper instead
+
         cur = st.session_state["phase"]
         st.markdown("**Phase (locked order)**")
         for p in PHASE_ORDER:
             mark = "▶️" if p == cur else ("✅" if st.session_state["completed"].get(p) else "⏳")
-            st.write(f"{mark} '{p}' - {st.session_state['turn_counts'][p]}/{PHASE_LIMITS[p]} turns")
-            
+            st.write(f"{mark} '{p}' — {st.session_state['turn_counts'][p]}/{PHASE_LIMITS[p]} turns")
 
-        # Mode is available ONLY in practice
-        is_practice = (cur == 'practice')
+        disabled = (st.session_state["phase"] != "Practice")
         st.radio(
             "Mode (only available in Practice)",
             ["Practice only", "Practice + Feedback"],
-            key = "mode_radio",
-            disabled = is_practice,
-            help = "Feedback is only available in Practice phase."
+            key="mode_radio",
+            disabled=disabled,
+            help="Feedback is only available in Practice phase.",
         )
-        if not is_practice:
+        ensure_mode_consistency()  # <- keep 'mode' in sync
+        if disabled:
             st.caption("Mode is locked outside Practice.")
 
-        # Start / Reset protocol
         if st.button("Session Start / Reset", type="primary", use_container_width=True):
             reset_all_and_start()
-            st.success("Session started at PRE. First patient message will be geerated.")
-            st.rerun() 
+            st.success("Session started at PRE. First patient message will be generated.")
+            st.rerun()
 
-        # Advance button appears once current phase is complete
-        if st.session_state["completed"].get(cur) and cur != "post":
-            nxt = PHASE_ORDER[PHASE_ORDER.index(cur) +1]
-            if st.button(f"Continue to **(nxt)**", use_container_width=True):
+        if st.session_state["completed"].get(cur) and cur != "Post":
+            nxt = PHASE_ORDER[PHASE_ORDER.index(cur) + 1]
+            if st.button(f"Continue to **{nxt}**", use_container_width=True):
                 start_next_phase()
-        
-        
-# UI: Header badges
+
+# -----------------------------
+# UI – Header badges
+# -----------------------------
 def render_header_badges():
     phase = st.session_state["phase"]
-    mode = effective_mode()
-    fb_on = (phase == "Practice" and mode == "Practice + Feedback")
-    
+    mode = effective_mode_from_state()
+    fb_on = feedback_enabled()
+
+    fb_badge = ":green[ENABLED]" if fb_on else ":red[DISABLED]"
+    mode_label = (f"`{mode}`" if phase == "Practice" else ":gray[Practice only (locked)]")
 
     st.title("CARE-style Counselor Practice (Google Gemini AI)")
     st.markdown(
         f"**Phase:** `{phase}`  |  "
-        f"**Mode:** `{'Practice only (locked)' if phase!='practice' else mode}`  |  "
-        f"**Feedback:** `{'ENABLED' if fb_on else 'DISABLED'}`  |  "
+        f"**Mode:** {mode_label}  |  "
+        f"**Feedback:** {fb_badge}  |  "
         f"**Turns:** {st.session_state['turn_counts'][phase]}/{PHASE_LIMITS[phase]}"
     )
-    st.caption("Measurement phase - feedback is disabled by design." if phase in ("Pre", "Post")
-                else ("Intervention phase - P+F (feedback is ENABLEd)." if fb_on 
-                      else "Intervention phase - Practice-only (no feedback)."))
-    st.caption(f"Tip: {build_input_hint()}")
+    st.caption(
+        "Measurement phase — feedback is disabled by design."
+        if phase in ("Pre", "Post")
+        else ("Intervention phase — P+F (feedback is ENABLED)." if fb_on
+              else "Intervention phase — Practice-only (no feedback).")
+    )
 
-
-# LLM: first patient message
+# -----------------------------
+# LLM – first patient message
+# -----------------------------
 def ensure_first_patient():
     if not st.session_state["patient_msgs"]:
         p = (
@@ -209,20 +253,18 @@ def ensure_first_patient():
             first, _ = gcall(p, max_tokens=140, temperature=0.7)
         st.session_state["patient_msgs"].append(first)
 
-
-# Send handling (run BEFORE drawing inputs)
+# -----------------------------
+# Send handling
+# -----------------------------
 def handle_pending_send():
-    """Process a send event safely *before* drawing widgets to avoid key-collisions."""
     if not st.session_state.get("_pending_send"):
         return
-
     st.session_state["_pending_send"] = False
 
-    # turn cap check
     ph = st.session_state["phase"]
     cap = PHASE_LIMITS[ph]
     if st.session_state["turn_counts"][ph] >= cap:
-        st.warning(f"{ph.upper()} phase is complete. Please procedd to the next phase form the sidebar.")
+        st.warning(f"{ph.upper()} phase is complete. Please proceed to the next phase from the sidebar.")
         return
 
     text = (st.session_state.get("reply_box") or "").strip()
@@ -239,11 +281,26 @@ def handle_pending_send():
     # (2) label/log/aggregate
     labs = label_turn_with_llm(gcall, text)
     st.session_state["turn_labels"].append(labs)
+
+    # micro feedback only in Practice
+    if st.session_state["phase"] == "Practice":
+        try:
+            micro = gen_micro_feedback(gcall, text, labs)
+        except Exception:
+            micro = {
+                "strength_title": "Strengths",
+                "strength_note": "Nice listening stance.",
+                "feedback_title": "Feedback",
+                "feedback_note": "Ask a gentle open question.",
+                "alt_response": "",
+            }
+        st.session_state["micro_fb"].append(micro)
+    else:
+        st.session_state["micro_fb"].append({})
+
     try:
-        # be safe inside log_turn
-        log_turn(st, text, labs)  # core/logs.py (ensure it uses labels.get to avoid KeyError)
+        log_turn(st, text, labs)
         _update_metrics_summary_from_labels()
-        # st.session_state["metrics_summary"] = compute_session_skill_rates(st.session_state["turn_labels"])
         log_session_snapshot(st)
     except Exception as e:
         st.warning(f"(logging skipped) {e}")
@@ -268,84 +325,74 @@ def handle_pending_send():
         st.session_state["completed"][ph] = True
         st.success(f"{ph.upper()} phase complete. Use the sidebar to continue.")
 
-    # clear input and rerun
     st.session_state["reply_box"] = ""
     st.rerun()
 
-
-# UI: Left Column (chat)
+# -----------------------------
+# UI – Left column (chat)
+# -----------------------------
 def render_chat_column():
     st.subheader("Conversation")
 
-    # Turn-by-turn history
     patient = st.session_state["patient_msgs"]
     counselor = st.session_state["counselor_msgs"]
+    phase = st.session_state["phase"]
 
+    # Turn-by-turn history
     for i, pmsg in enumerate(patient):
         if i > 0:
             st.divider()
-        st.markdown(f"**Turn {i+1}**")
+        st.markdown(f"**Turn {i + 1}**")
         st.markdown(f"**Patient:** {pmsg}")
         if i < len(counselor):
-            st.markdown(f"**Patient:** {pmsg}")
+            st.markdown(f"**You:** {counselor[i]}")
         else:
-            st.caption("Your reply goes below to complete this turn.")
+            st.caption("Write your reply below to complete this turn.")
 
+    # Input + buttons
+    st.text_area(
+        "Your reply (1–3 sentences)",
+        height=130,
+        key="reply_box",
+        placeholder=build_input_hint(),
+    )
 
-    # history
-    for i, pmsg in enumerate(st.session_state["patient_msgs"]):
-        st.markdown(f"**Patient:** {pmsg}")
-        if i < len(st.session_state["counselor_msgs"]):
-            st.markdown(f"**You:** {st.session_state['counselor_msgs'][i]}")
-
-
-    # input + buttons
-    st.text_area("Your reply (1–3 sentences)", 
-                 height=130, key="reply_box",
-                 placeholder = build_input_hint())
-
-    phase = st.session_state["phase"]
     cap = PHASE_LIMITS[phase]
     sent = st.session_state["turn_counts"][phase]
     send_disabled = (sent >= cap)
-
 
     def _trigger_send():
         st.session_state["_pending_send"] = True
 
     c1, c2 = st.columns([1, 1])
-    c1.button("Send", 
-              type="primary", 
-              use_container_width=True, 
-              key="btn_send", 
-              on_click=_trigger_send, 
-              disabled=send_disabled)
+    c1.button(
+        "Send",
+        type="primary",
+        use_container_width=True,
+        key="btn_send",
+        on_click=_trigger_send,
+        disabled=send_disabled,
+    )
 
-    # Feedback button enabled ONLY in practice + P+F
-    mode        = effective_mode()
-    fb_enabled  = (phase == "practice" and mode == "Practice + Feedback")
-    fb_click    = c2.button("Feedback", 
-                            use_container_width=True, 
-                            key="btn_feedback",
-                            disabled = not fb_enabled,
-                            help="Enabled only during Practice phase in Practice + Feedback mode."
+    fb_click = c2.button(
+        "Feedback",
+        use_container_width=True,
+        key="btn_feedback",
+        disabled=not feedback_enabled(),  # <- no-arg
+        help="Enabled only during Practice phase in Practice + Feedback mode.",
     )
     return fb_click
 
-
-# UI: Right Column (Feedback)
+# -----------------------------
+# UI – Right column (feedback)
+# -----------------------------
 def render_feedback_column(fb_click):
     st.subheader("Feedback / Summary")
 
-    phase = st.session_state["phase"]
-    mode = effective_mode()
-    feedback_enabled = (phase == "practice" and mode == "Practice + Feedback")
-
-    if not feedback_enabled:
+    if not feedback_enabled():  # <- no-arg
         st.info("Feedback is unavailable in this phase.")
         return
 
-    # Generate on demand
     if fb_click:
         history_text = build_history(st.session_state["patient_msgs"], st.session_state["counselor_msgs"])
         overall_prompt = (
@@ -356,8 +403,6 @@ def render_feedback_column(fb_click):
         with st.spinner("Generating session-level feedback..."):
             fb_all, _ = gcall(overall_prompt, max_tokens=800, temperature=0.4)
         st.session_state["overall_feedback"] = fb_all
-
-        # parse for GAP/T_GAP
         st.session_state["session_metrics"] = parse_session_metrics(fb_all)
         st.rerun()
 
@@ -366,7 +411,6 @@ def render_feedback_column(fb_click):
     else:
         st.info("Write a reply, then click **Feedback** to get session-level feedback.")
 
-    # Optional: live skill tallies (you may hide in pre/post to avoid bias)
     if st.session_state.get("metrics_summary"):
         st.divider()
         st.markdown("**Live skill usage in this session** (fraction of counselor turns):")
@@ -377,49 +421,53 @@ def render_feedback_column(fb_click):
         st.write(f"- Validation: {ms.get('Validation', 0):.2f}")
         st.write(f"- Suggestions: {ms.get('Suggestions', 0):.2f}")
 
-
-# UI: Self-efficacy (pre/post only) 
+# -----------------------------
+# UI – Self-efficacy (Pre/Post)
+# -----------------------------
 def render_self_efficacy_if_needed():
     phase = st.session_state["phase"]
     if phase not in ("Pre", "Post"):
         return
 
-    with st.expander("Self-efficacy (0–8)", expanded=False):
-        se_expl = st.slider("Exploration", 0, 8, 5, step=1, key=f"se_expl_{phase}")
-        se_act  = st.slider("Action", 0, 8, 5, step=1, key=f"se_act_{phase}")
-        se_mgmt = st.slider("Session Mgmt", 0, 8, 5, step=1, key=f"se_mgmt_{phase}")
+    with st.expander("Self-efficacy (0–7)", expanded=False):
+        se_expl = st.slider("Exploration", 0, 7, 4, step=1, key=f"se_expl_{phase}")
+        se_act = st.slider("Action", 0, 7, 4, step=1, key=f"se_act_{phase}")
+        se_mgmt = st.slider("Session Mgmt", 0, 7, 4, step=1, key=f"se_mgmt_{phase}")
         if st.button(f"Save self-efficacy ({phase})", use_container_width=True, key=f"se_save_{phase}"):
             os.makedirs("logs", exist_ok=True)
             path = os.path.join("logs", "seff.csv")
             row = {
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "participant_id": st.session_state["participant_id"],
-                "session_id":     st.session_state["session_id"],
-                "phase":          phase,
-                "mode":           effective_mode(),
-                "scenario":       st.session_state["scenario"],
-                "Exploration":    se_expl, 
-                "Action":         se_act, 
-                "SessionMgmt":    se_mgmt,
+                "session_id": st.session_state["session_id"],
+                "phase": phase,
+                "mode": effective_mode_from_state(),
+                "scenario": st.session_state["scenario"],
+                "Exploration": se_expl,
+                "Action": se_act,
+                "SessionMgmt": se_mgmt,
             }
             new = not os.path.exists(path)
             with open(path, "a", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=row.keys())
-                if new: w.writeheader()
+                if new:
+                    w.writeheader()
                 w.writerow(row)
             st.success(f"Saved self-efficacy for {phase}.")
-
 
             if phase == "Pre" and st.session_state["completed"].get("Pre"):
                 start_next_phase()
                 st.rerun()
 
-
-
+# -----------------------------
 # MAIN
+# -----------------------------
 def main():
-    st.set_page_config(page_title="CARE-style Counselor Practice (Google Gemini AI)",
-                       page_icon="🧠", layout="wide")
+    st.set_page_config(
+        page_title="CARE-style Counselor Practice (Google Gemini AI)",
+        page_icon="🧠",
+        layout="wide",
+    )
 
     setup_session_defaults()
     force_phase_scenario()
@@ -431,21 +479,15 @@ def main():
 
     render_header_badges()
     ensure_first_patient()
-
-    # Process a pending send (must run BEFORE drawing input widgets)
     handle_pending_send()
 
-    # Layout
     left, right = st.columns([0.58, 0.42])
     with left:
         fb_click = render_chat_column()
     with right:
         render_feedback_column(fb_click)
 
-    # Self-efficacy only in pre/post
     render_self_efficacy_if_needed()
-
 
 if __name__ == "__main__":
     main()
-

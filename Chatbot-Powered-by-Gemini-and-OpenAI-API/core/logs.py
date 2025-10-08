@@ -1,17 +1,21 @@
 # core/logs.py
 import os, csv
 from datetime import datetime
+import streamlit as st
+
+# from care_gemini import effective_mode_from_state
 
 os.makedirs("logs", exist_ok=True)
 
 
-def _effective_mode_from_state(st):
-    return(
-        st.session_state.get("mode_radio", "Practice only")
-        if st.session_state.get("phase") == "practice"
-        else "Practice only"
-    )
-
+def _effective_mode_from_state(st)->str:
+    """Avoid circular import: compute mode directly from session_state."""
+    ph = st.session_state.get("phase", "Practice")
+    if ph == "Practice":
+        return(st.session_state.get("mode")
+               or st.session_state.get("mode_radio")
+               or "Practice only")
+    return "Practice only"
 
 def log_turn(st, counselor_text: str, labels: dict):
     path = os.path.join("logs", "turns.csv")
@@ -19,10 +23,11 @@ def log_turn(st, counselor_text: str, labels: dict):
         "ts": datetime.now().isoformat(timespec="seconds"),
         "session_id": st.session_state["session_id"],
         "mode": _effective_mode_from_state(st),
+        # "mode": effective_mode(),
         "scenario": st.session_state["scenario"],
         "phase": st.session_state.get("phase", "practice"),
         "turn_idx": len(st.session_state.get("counselor_msgs", [])),
-        "text": (counselor_text or "").replace("\n", " ").strip(),
+        "text": counselor_text.replace("\n", " ").strip(),
         "empathy":       int(labels.get("empathy", 0)),
         "reflection":    int(labels.get("reflection", 0)),
         "validation":    int(labels.get("validation", 0)),
