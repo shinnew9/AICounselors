@@ -1,4 +1,3 @@
-# core/logs.py
 import os, csv
 from datetime import datetime
 import streamlit as st

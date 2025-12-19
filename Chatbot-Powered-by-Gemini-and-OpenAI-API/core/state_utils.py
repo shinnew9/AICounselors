@@ -1,4 +1,3 @@
-# core/state_utils.py
 import streamlit as st
 
 PHASE_PRACTICE = "Practice"
