@@ -23,9 +23,8 @@ from core.state_utils import (
 )
 from core.logs import log_turn, log_session_snapshot
 
-# -----------------------------
+
 # Config
-# -----------------------------
 PHASE_ORDER = ["Pre", "Practice", "Post"]
 PHASE_LIMITS = {"Pre": 6, "Practice": 10, "Post": 6}
 
@@ -54,9 +53,8 @@ Return STRICT JSON with fields:
 Output JSON only.
 """
 
-# -----------------------------
+
 # Small helpers
-# -----------------------------
 def _clean_json_block(text: str) -> dict:
     t = text.strip()
     s, e = t.find("{"), t.rfind("}")
@@ -112,9 +110,8 @@ def build_input_hint() -> str:
         return "Practice listening: use empathy or an open question. Keep it brief (1–3 sentences)."
     return "Final assessment: 1–3 short sentences. Show active listening; one open question max; avoid advice."
 
-# -----------------------------
+
 # Session state
-# -----------------------------
 def setup_session_defaults():
     st.session_state.setdefault("participant_id", str(uuid.uuid4()))
     st.session_state.setdefault("session_id", str(uuid.uuid4()))
@@ -215,9 +212,8 @@ def render_sidebar():
             if st.button(f"Continue to **{nxt}**", use_container_width=True):
                 start_next_phase()
 
-# -----------------------------
+
 # UI – Header badges
-# -----------------------------
 def render_header_badges():
     phase = st.session_state["phase"]
     mode = effective_mode_from_state()
@@ -240,9 +236,8 @@ def render_header_badges():
               else "Intervention phase — Practice-only (no feedback).")
     )
 
-# -----------------------------
+
 # LLM – first patient message
-# -----------------------------
 def ensure_first_patient():
     if not st.session_state["patient_msgs"]:
         p = (
@@ -253,9 +248,8 @@ def ensure_first_patient():
             first, _ = gcall(p, max_tokens=140, temperature=0.7)
         st.session_state["patient_msgs"].append(first)
 
-# -----------------------------
+
 # Send handling
-# -----------------------------
 def handle_pending_send():
     if not st.session_state.get("_pending_send"):
         return
@@ -328,9 +322,8 @@ def handle_pending_send():
     st.session_state["reply_box"] = ""
     st.rerun()
 
-# -----------------------------
+
 # UI – Left column (chat)
-# -----------------------------
 def render_chat_column():
     st.subheader("Conversation")
 
@@ -383,9 +376,8 @@ def render_chat_column():
     )
     return fb_click
 
-# -----------------------------
+
 # UI – Right column (feedback)
-# -----------------------------
 def render_feedback_column(fb_click):
     st.subheader("Feedback / Summary")
 
@@ -421,9 +413,8 @@ def render_feedback_column(fb_click):
         st.write(f"- Validation: {ms.get('Validation', 0):.2f}")
         st.write(f"- Suggestions: {ms.get('Suggestions', 0):.2f}")
 
-# -----------------------------
+
 # UI – Self-efficacy (Pre/Post)
-# -----------------------------
 def render_self_efficacy_if_needed():
     phase = st.session_state["phase"]
     if phase not in ("Pre", "Post"):

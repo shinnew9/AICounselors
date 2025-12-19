@@ -11,21 +11,22 @@ os.makedirs("logs", exist_ok=True)
 def _effective_mode_from_state(st)->str:
     """Avoid circular import: compute mode directly from session_state."""
     ph = st.session_state.get("phase", "Practice")
-    if ph == "Practice":
-        return(st.session_state.get("mode")
-               or st.session_state.get("mode_radio")
-               or "Practice only")
-    return "Practice only"
+    if ph != "Practice":
+        return "Practice only"
+    return(st.session_state.get("mode")
+            or st.session_state.get("mode_radio")
+            or "Practice only")
 
-def log_turn(st, counselor_text: str, labels: dict):
+def log_turn(st_mod, counselor_text: str, labels: dict):
+    ss = st_mod.session_state
     path = os.path.join("logs", "turns.csv")
     row = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "session_id": st.session_state["session_id"],
-        "mode": _effective_mode_from_state(st),
+        "mode": _effective_mode_from_state(),
         # "mode": effective_mode(),
         "scenario": st.session_state["scenario"],
-        "phase": st.session_state.get("phase", "practice"),
+        "phase": ss.session_state.get("phase", "practice"),
         "turn_idx": len(st.session_state.get("counselor_msgs", [])),
         "text": counselor_text.replace("\n", " ").strip(),
         "empathy":       int(labels.get("empathy", 0)),
@@ -41,9 +42,10 @@ def log_turn(st, counselor_text: str, labels: dict):
             w.writeheader()
         w.writerow(row)
 
-def log_session_snapshot(st):
+def log_session_snapshot(st_mod):
+    ss = st_mod.session_state
     path = os.path.join("logs", "sessions.csv")
-    ms = st.session_state.get("metrics_summary", {})
+    ms = ss.session_state.get("metrics_summary", {})
     c_words = sum(len(t.split()) for t in st.session_state.get("counselor_msgs", [])) or 1
     gap_words = st.session_state.get("session_metrics", {}).get("gap_words", 0)
     t_gap = round(gap_words / c_words, 4)
