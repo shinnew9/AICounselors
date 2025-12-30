@@ -8,13 +8,19 @@ def nav():
     st.session_state["page"] = picked
 
 def render_turn(role: str, text: str):
-    if role == "user":
-        with st.chat_message("user"):
-            st.write(text)
-    elif role == "assistant":
+    """
+    Our app semantics:
+    - 'patient' should appear on LEFT  -> chat_message("assistant")
+    - 'counselor' should appear on RIGHT -> chat_message("user")
+    """
+    if role == "patient":
         with st.chat_message("assistant"):
             st.write(text)
+    elif role == "counselor":
+        with st.chat_message("user"):
+            st.write(text)
     else:
+        # system
         with st.chat_message("assistant"):
             if st.session_state.get("compact_system", True):
                 st.markdown(f"*{text}*")
