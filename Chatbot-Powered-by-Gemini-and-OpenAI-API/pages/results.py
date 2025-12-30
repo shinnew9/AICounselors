@@ -255,6 +255,12 @@ def _render_instructor_tools():
         "metrics_summary": st.session_state.get("metrics_summary", {}),
         "overall_feedback": st.session_state.get("overall_feedback"),
         "ts": datetime.now().isoformat(timespec="seconds"),
+        
+        # keep internal ids for metrics/logging 
+        "active_session_id": st.session_state.get("active_session_id"),
+        # "qc" = st.session_state.get("qc", {}),
+        "removed_dupes": st.session_state.get("removed_dupes", 0)
+
     }
 
     with st.expander("Instructor tools (hidden in student mode)", expanded=False):
