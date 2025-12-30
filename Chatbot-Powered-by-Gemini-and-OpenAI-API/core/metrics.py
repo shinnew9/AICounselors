@@ -81,12 +81,13 @@ JSON:"""
 
 def compute_session_skill_rates(labels: list[dict]) -> dict:
     n = max(1, len(labels))
-    sums = {"Empathy": 0, "Reflection": 0, "Validation":0, "Open Questions": 0, "Suggestions":0}
+    sums = {"Empathy": 0, "Reflection": 0, "Validation":0, "Open Questions": 0, "Suggestion":0}
     for d in labels:
         sums["Empathy"] += d.get("empathy", 0)
         sums["Reflection"] += d.get("reflection", 0)
         sums["Validation"] += d.get("validation", 0)
         sums["Open Questions"] += d.get("open_question",0)
+        sums.setdefault("Suggestion", 0)
         sums["Suggestion"] += d.get("suggestion",0)
 
     return {k: round(v / n, 4) for k, v in sums.items()}
