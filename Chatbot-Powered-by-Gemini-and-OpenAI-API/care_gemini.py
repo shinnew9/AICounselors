@@ -4,6 +4,7 @@
 import os, re, uuid, csv, json
 import streamlit as st
 from datetime import datetime
+import random
 
 from core.llm import gcall
 from core.prompts import (
@@ -111,6 +112,79 @@ def build_input_hint() -> str:
     return "Final assessment: 1–3 short sentences. Show active listening; one open question max; avoid advice."
 
 
+def _normalize_role(role: str) -> str:
+    r = (role or "").strip().lower()
+    if r in {"user", "patient", "client", "seeker"}:
+        return "user"
+    if r in {"assistant", "counselor", "therapist"}:
+        return "assistant"
+    if r == "system":
+        return "system"
+    return "system"  # 안전하게 system으로
+
+def qc_clean_turns(turns: list[dict], remove_consecutive_dupes=True):
+    """
+    returns:
+      cleaned_turns: [{"role": "user|assistant|system", "text": "..."}]
+      qc: {removed_dupes:int, alternation_issues:[...], role_counts:{...}}
+    """
+    cleaned = []
+    removed_dupes = 0
+    prev_key = None
+
+    # 1) normalize + trim + consecutive dedupe
+    for t in (turns or []):
+        role = _normalize_role(t.get("role"))
+        text = (t.get("text") or "").strip()
+        if not text:
+            continue
+        key = (role, text)
+        if remove_consecutive_dupes and prev_key == key:
+            removed_dupes += 1
+            continue
+        prev_key = key
+        cleaned.append({"role": role, "text": text})
+
+    # 2) alternation check (ignoring system)
+    non_system = [t for t in cleaned if t["role"] in {"user", "assistant"}]
+    issues = []
+    for i in range(1, len(non_system)):
+        if non_system[i]["role"] == non_system[i-1]["role"]:
+            issues.append({
+                "idx_in_nonsys": i,
+                "role": non_system[i]["role"],
+                "prev_text": non_system[i-1]["text"][:80],
+                "curr_text": non_system[i]["text"][:80],
+            })
+
+    # counts
+    counts = {"user": 0, "assistant": 0, "system": 0}
+    for t in cleaned:
+        counts[t["role"]] = counts.get(t["role"], 0) + 1
+
+    qc = {"removed_dupes": removed_dupes, "alternation_issues": issues, "role_counts": counts}
+    return cleaned, qc
+
+def render_turn_chat(role: str, text: str, compact_system=True):
+    """
+    Streamlit chat rendering.
+    compact_system=True -> system은 작은 italic로 표시
+    """
+    if role == "user":
+        with st.chat_message("user"):
+            st.write(text)
+    elif role == "assistant":
+        with st.chat_message("assistant"):
+            st.write(text)
+    else:
+        # system
+        with st.chat_message("assistant"):
+            if compact_system:
+                st.markdown(f"*{text}*")
+            else:
+                st.write(text)
+
+
 # Session state
 def setup_session_defaults():
     st.session_state.setdefault("participant_id", str(uuid.uuid4()))
@@ -133,6 +207,14 @@ def setup_session_defaults():
     st.session_state.setdefault("turn_labels", [])
     st.session_state.setdefault("_pending_send", False)
     st.session_state.setdefault("reply_box", "")
+    st.session_state.setdefault("ds_hide_system", True)
+    st.session_state.setdefault("ds_dedupe", True)
+    st.session_state.setdefault("ds_compact_system", True)
+
+    st.checkbox("Hide system turns", key="ds_hide_system")
+    st.checkbox("Remove consecutive duplicates", key="ds_dedupe")
+    st.checkbox("Compact system style", key="ds_compact_system")
+
 
 def reset_run_state():
     for k in [
@@ -176,9 +258,8 @@ def start_next_phase():
         st.session_state["session_id"] = str(uuid.uuid4())
         st.rerun()
 
-# -----------------------------
+
 # UI – Sidebar
-# -----------------------------
 def render_sidebar():
     with st.sidebar:
         st.header("Session setup")
@@ -235,6 +316,55 @@ def render_header_badges():
         else ("Intervention phase — P+F (feedback is ENABLED)." if fb_on
               else "Intervention phase — Practice-only (no feedback).")
     )
+
+
+def render_dataset_session_chat():
+    sess = st.session_state.get("loaded_ds_session")
+    if not sess:
+        st.info("Load a random session from the sidebar to preview dataset turns.")
+        return
+
+    raw_turns = sess.get("turns", [])
+    turns, qc = qc_clean_turns(raw_turns, remove_consecutive_dupes=st.session_state["ds_dedupe"])
+
+    st.subheader("Dataset session preview")
+    st.caption(
+        f"session_id: {sess.get('session_id') or sess.get('sid')}  |  "
+        f"turns: {len(raw_turns)} → {len(turns)}  |  "
+        f"removed_dupes: {qc['removed_dupes']}"
+    )
+
+    # 교대 문제 경고 (실습 품질에 중요)
+    if qc["alternation_issues"]:
+        st.warning(
+            f"⚠️ Turn alternation issue: {len(qc['alternation_issues'])} places where the same role speaks twice in a row "
+            "(ignoring system)."
+        )
+        with st.expander("Show alternation issues"):
+            st.json(qc["alternation_issues"][:20])  # 너무 길면 20개만
+
+    # system 숨김 적용
+    if st.session_state["ds_hide_system"]:
+        turns_to_show = [t for t in turns if t["role"] != "system"]
+    else:
+        turns_to_show = turns
+
+    # 채팅 렌더
+    for t in turns_to_show:
+        render_turn_chat(
+            t["role"],
+            t["text"],
+            compact_system=st.session_state["ds_compact_system"]
+        )
+
+
+def pick_good_random_session(sessions, max_tries=50):
+    for _ in range(max_tries):
+        s = random.choice(sessions)
+        turns, qc = qc_clean_turns(s.get("turns", []), remove_consecutive_dupes=True)
+        if not qc["alternation_issues"] and len(turns) >= 6:
+            return s
+    return random.choice(sessions)  # fallback
 
 
 # LLM – first patient message
@@ -450,9 +580,8 @@ def render_self_efficacy_if_needed():
                 start_next_phase()
                 st.rerun()
 
-# -----------------------------
+
 # MAIN
-# -----------------------------
 def main():
     st.set_page_config(
         page_title="CARE-style Counselor Practice (Google Gemini AI)",
