@@ -11,6 +11,32 @@ from core_ui.ui import render_turn
 from core.llm import gcall
 from core.metrics import label_turn_with_llm, compute_session_skill_rates
 
+
+def _ensure_ui_flags():
+    st.session_state.setdefault("panel_open", True)
+
+
+def _apply_chat_wide_css(panel_open: bool):
+    # panel 닫으면 말풍선/컨테이너 폭을 최대한 넓게
+    if not panel_open:
+        st.markdown(
+            """
+            <style>
+              /* main container a bit wider feeling */
+              section.main > div { padding-left: 2rem; padding-right: 2rem; }
+
+              /* make chat messages use more horizontal space */
+              [data-testid="stChatMessage"] { width: 100% !important; }
+              [data-testid="stChatMessageContent"] { width: 100% !important; max-width: 100% !important; }
+
+              /* reduce max-width clamp inside markdown blocks */
+              .stMarkdown, .stMarkdown p { max-width: 100% !important; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 RISK_PAT = re.compile(r"\b(suicide|kill myself|self[- ]harm|end it|overdose|hurt myself)\b", re.I)
 
 
@@ -62,6 +88,10 @@ def _load_random_session() -> bool:
     turns_raw = get_turns(s)
     turns_cleaned, qc = qc_clean_turns(turns_raw, remove_consecutive_dupes=st.session_state["dedupe"])
 
+    # keep internal ids for metrics/logging
+    st.session_state["active_session_id"] = str(session_id(s, "session"))
+    st.session_state["removed_dupes"] = int(qc.get("removed_dupes", 0))
+
     if st.session_state["hide_system"]:
         turns_display = [t for t in turns_cleaned if t["role"] != "system"]
     else:
@@ -97,105 +127,131 @@ def _load_random_session() -> bool:
     return True
 
 
-
 def render():
-    st.subheader("Chat")
+    _ensure_ui_flags()
+    _apply_chat_wide_css(st.session_state["panel_open"])
 
-    if not st.session_state.get("profile"):
-        st.info("Please complete **Intake** first.")
-        return
-
-    with st.sidebar:
-        st.header("Dataset / Session")
-
-        files = list_data_files(DATA_ROOT)
-        if files:
-            cur = st.session_state.get("ds_file")
-            st.session_state["ds_file"] = st.selectbox(
-                "Dataset file",
-                files,
-                index=files.index(cur) if cur in files else 0
-            )
-
-        st.session_state["max_rows"] = st.number_input("Max rows (perf)", 1000, 200000, int(st.session_state["max_rows"]), step=1000)
-
-        options = ["(no filter)", "African American student", "Hispanic college student"]
-
-        cur_rt = st.session_state.get("rewrite_target")
-        if cur_rt in options:
-            default_idx = options.index(cur_rt)
-        elif cur_rt is None:
-            default_idx = 0
-        else:
-            default_idx = 0
-
-        rt = st.selectbox(
-            "Rewrite target filter",
-            options,
-            index=default_idx,
-        )
-        st.session_state["rewrite_target"] = None if rt == "(no filter)" else rt
-
-        st.divider()
-        st.checkbox("Hide system turns", key="hide_system")
-        st.checkbox("Remove consecutive duplicates", key="dedupe")
-        st.checkbox("Compact system style", key="compact_system")
-
-        if st.button("🎲 Load random session", use_container_width=True):
-            ok = _load_random_session()
-            st.session_state["_load_ok"] = ok
+    # Top bar
+    top_l, top_r = st.columns([0.08, 0.92])
+    with top_l:
+        if st.button("☰", help="Show/hide panel"):
+            st.session_state["panel_open"] = not st.session_state["panel_open"]
             st.rerun()
+    with top_r:
+        st.title("🧠 AI Counselor Simulation")
 
-        if st.button("Reset chat (keep profile)", use_container_width=True):
-            reset_chat_state(keep_profile=True)
-            st.rerun()
+    # Layout columns (panel + chat)
+    if st.session_state["panel_open"]:
+        panel, chatcol = st.columns([0.28, 0.72], gap="large")
+    else:
+        panel, chatcol = None, st.container()
 
-    if not st.session_state.get("loaded_session"):
-        err = st.session_state.get("_load_err")
-        if err:
-            st.error(err)
-        st.info("Use the sidebar to **Load random session**.")
-        # 입력창은 로드 전엔 못 쓰니까 여기서 return은 맞음
-        return
+    # -------------------------
+    # LEFT PANEL (foldable)
+    # -------------------------
+    if panel is not None:
+        with panel:
+            st.markdown("### Session")
 
-    sid = session_id(st.session_state["loaded_session"], "session")
-    qc = st.session_state.get("qc", {})
-    st.caption(f"session_id: {sid} | removed_dupes: {qc.get('removed_dupes', 0)}")
+            prof = st.session_state.get("profile") or {}
+            race = (prof.get("race_ethnicity") or "").lower()
 
-    if qc.get("alternation_issues"):
-        st.warning(f"⚠️ Alternation issues detected: {len(qc['alternation_issues'])}")
-        with st.expander("Show alternation issues"):
-            st.json(qc["alternation_issues"][:20])
+            # Intake 기반 고정
+            if "african" in race:
+                st.session_state["rewrite_target"] = "African American student"
+                want_hint = "african"
+            elif "hispanic" in race:
+                st.session_state["rewrite_target"] = "Hispanic college student"
+                want_hint = "hispanic"
+            else:
+                st.session_state["rewrite_target"] = None
+                want_hint = None
 
-    # render conversation so far
-    for i, pmsg in enumerate(st.session_state["patient_msgs"]):
-        render_turn("user", pmsg)
-        if i < len(st.session_state["counselor_msgs"]):
-            render_turn("assistant", st.session_state["counselor_msgs"][i])
+            # 내부 고정값
+            st.session_state["max_rows"] = 20000
 
-    turns = st.session_state.get("turns_cleaned", [])
-    # END 판단은 최소 1개 patient가 있고, cursor가 끝이고, patient==counselor일 때만
-    if turns and st.session_state["patient_msgs"] and st.session_state["cursor"] >= len(turns) and len(st.session_state["patient_msgs"]) == len(st.session_state["counselor_msgs"]):
-        st.success("End of scripted patient turns. Go to Results.")
-        if st.button("Go to Results", type="primary"):
-            st.session_state["page"] = "Results"
-            st.rerun()
-        return
+            files = list_data_files(DATA_ROOT)
+            if not files:
+                st.error(f"No data files found under: {DATA_ROOT}")
+                st.stop()
 
-    reply = st.chat_input("Type your counselor reply (1–3 sentences)…")
-    if reply:
-        reply = reply.strip()
-        if not reply:
+            def pick_file_by_hint(files, hint):
+                if not hint:
+                    return files[0]
+                for f in files:
+                    if hint in f.lower():
+                        return f
+                return files[0]
+
+            st.session_state["ds_file"] = pick_file_by_hint(files, want_hint)
+
+            st.caption(f"Client profile: **{prof.get('race_ethnicity','Unknown')}**")
+            if st.session_state["rewrite_target"]:
+                st.caption(f"Dataset: **{st.session_state['rewrite_target']}**")
+
+            st.divider()
+            st.checkbox("Hide system turns", key="hide_system")
+            st.checkbox("Remove consecutive duplicates", key="dedupe")
+            st.checkbox("Compact system style", key="compact_system")
+
+            if st.button("🎲 Load new session", use_container_width=True):
+                ok = _load_random_session()
+                if not ok:
+                    st.session_state["_load_ok"] = False
+                st.rerun()
+
+            if st.button("Reset chat (keep profile)", use_container_width=True):
+                reset_chat_state(keep_profile=True)
+                st.rerun()
+
+    # -------------------------
+    # RIGHT: CHAT AREA
+    # -------------------------
+    with chatcol:
+        st.subheader("Chat")
+
+        # Not loaded yet
+        if not st.session_state.get("loaded_session"):
+            err = st.session_state.get("_load_err")
+            if err:
+                st.error(err)
+            st.info("Click **🎲 Load new session** on the left panel.")
             return
 
-        if RISK_PAT.search(reply):
-            st.warning("⚠️ Crisis-related language detected. In real settings, US: 988.")
+        # End-of-session guard (only after at least 1 patient shown)
+        turns = st.session_state.get("turns_cleaned", []) or []
+        if turns and st.session_state.get("patient_msgs") and st.session_state.get("cursor", 0) >= len(turns) \
+           and len(st.session_state.get("patient_msgs", [])) == len(st.session_state.get("counselor_msgs", [])):
+            st.success("End of scripted patient turns. Go to Results.")
+            if st.button("Go to Results", type="primary"):
+                st.session_state["page"] = "Results"
+                st.rerun()
+            return
 
-        st.session_state["counselor_msgs"].append(reply)
+        # Render dialogue (left=patient, right=counselor)
+        patient_msgs = st.session_state.get("patient_msgs", [])
+        counselor_msgs = st.session_state.get("counselor_msgs", [])
+        for i, pmsg in enumerate(patient_msgs):
+            render_turn("patient", pmsg)
+            if i < len(counselor_msgs):
+                render_turn("counselor", counselor_msgs[i])
 
-        labs = label_turn_with_llm(gcall, reply)
-        st.session_state["turn_labels"].append(labs)
-        _update_metrics_summary()
+        # Input
+        user_text = st.chat_input("Type your counselor reply (1–3 sentences)...")
+        if user_text:
+            user_text = user_text.strip()
+            if not user_text:
+                return
 
-        _advance_to_next_patient()
-        st.rerun()
+            if RISK_PAT.search(user_text):
+                st.warning("⚠️ Crisis-related language detected. In real settings, US: 988.")
+
+            st.session_state["counselor_msgs"].append(user_text)
+
+            labs = label_turn_with_llm(gcall, user_text)
+            st.session_state.setdefault("turn_labels", []).append(labs)
+
+            _update_metrics_summary()
+            _advance_to_next_patient()
+
+            st.rerun()
