@@ -1,8 +1,12 @@
+import os
+
 import streamlit as st
 from datetime import datetime
 from core_ui.state import reset_chat_state
 
+
 def render():
+    st.write("INTAKE FILE:", os.path.abspath(__file__))
     st.subheader("Intake Survey (Create a client profile)")
     st.caption("Fill this out once, then start chatting using this profile.")
 
@@ -31,7 +35,7 @@ def render():
     with c7:
         topic = st.text_input("Topic (optional)", value=(concerns[0] if concerns else ""))
 
-    if st.button("Create profile & Start chat", type="primary"):
+    if st.button("Create profile & Start chat", type="primary", key="btn_create_profile"):
         st.session_state["profile"] = {
             "race_ethnicity": race,
             "gender": gender,
