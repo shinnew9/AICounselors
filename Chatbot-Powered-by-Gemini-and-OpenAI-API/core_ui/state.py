@@ -1,5 +1,12 @@
 import uuid
 import streamlit as st
+# from core_ui.state import ensure_global_ui_state
+
+def ensure_global_ui_state():
+    st.session_state.setdefault("panel_open", True)
+
+def toggle_panel():
+    st.session_state["panel_open"] = not st.session_state.get("panel_open", True)
 
 
 def init_state():
