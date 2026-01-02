@@ -2,20 +2,18 @@ import streamlit as st
 import html
 
 def nav():
-    # 3 tabs only
     tabs = ["Intake", "Chat", "Results"]
-    idx = tabs.index(st.session_state["page"]) if st.session_state["page"] in tabs else 0
+    idx = tabs.index(st.session_state["page"]) if st.session_state.get("page") in tabs else 0
     picked = st.radio("Navigation", tabs, index=idx, horizontal=True, label_visibility="collapsed")
     st.session_state["page"] = picked
 
 
-def _bubble_css_once():
-    if st.session_state.get("_bubble_css_loaded"):
-        return
-    st.session_state["_bubble_css_loaded"] = True
+def _bubble_css():
+    # IMPORTANT: Streamlit reruns the script on every interaction.
+    # So we MUST inject CSS every run (do NOT gate with session_state).
     st.markdown("""
     <style>
-      .bubble-wrap { width: 100%; margin: 0.25rem 0; display: flex; }
+      .bubble-wrap { width: 100%; margin: 0.35rem 0; display: flex; }
       .bubble-left { justify-content: flex-start; }
       .bubble-right { justify-content: flex-end; }
 
@@ -29,32 +27,28 @@ def _bubble_css_once():
         white-space: pre-wrap;
       }
 
-      /* Left (AI patient) */
+      /* Left (Patient) */
       .bubble.patient {
         background: rgba(255,255,255,0.06);
-        border: 1px solid rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.10);
       }
 
       /* Right (Counselor) */
       .bubble.counselor {
         background: rgba(0, 122, 255, 0.18);
-        border: 1px solid rgba(0, 122, 255, 0.28);
+        border: 1px solid rgba(0, 122, 255, 0.30);
       }
 
-      /* small role tag */
-      .role-tag {
-        font-size: 0.78rem;
-        opacity: 0.70;
-        margin: 0 0.6rem;
-        align-self: flex-end;
-      }
+      /* Optional: make the chat area breathe a bit */
+      .chat-area-title { margin-top: 0.2rem; }
+
     </style>
-    """, unsafe_allow_html=True)          
+    """, unsafe_allow_html=True)
 
 
 def render_turn(role: str, text: str):
-    _bubble_css_once()
-    safe = html.escape(text)
+    _bubble_css()
+    safe = html.escape(text or "")
 
     if role == "patient":
         st.markdown(
@@ -75,8 +69,14 @@ def render_turn(role: str, text: str):
             unsafe_allow_html=True,
         )
     else:
-        # system (optional)
+        # system
         if st.session_state.get("hide_system"):
             return
-        st.markdown(f"<div class='role-tag'>system</div><div class='bubble patient'><i>{safe}</i></div>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="bubble-wrap bubble-left">
+              <div class="bubble patient"><i>{safe}</i></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
