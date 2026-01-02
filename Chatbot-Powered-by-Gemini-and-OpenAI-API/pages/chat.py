@@ -99,6 +99,7 @@ def _update_metrics_summary() -> None:
 
 def _advance_to_next_patient() -> None:
     turns = st.session_state.get("turns_cleaned", []) or []
+    # 여기선 c, 밑에 함수에선 cursor
     c = int(st.session_state.get("cursor", 0))
 
     while c < len(turns) and turns[c].get("role") != "user":
@@ -146,6 +147,7 @@ def _load_random_session() -> bool:
         return False
 
     st.session_state["ds_file"] = ds_file
+    st.session_state["session_ended"] = False
 
     sessions = load_sessions_any(ds_file, max_rows=int(st.session_state.get("max_rows", 20000)))
     sessions = filter_sessions(sessions, st.session_state.get("rewrite_target"))
@@ -190,6 +192,7 @@ def _load_random_session() -> bool:
     # play counter/log (internal)
     st.session_state["session_play_count"] = int(st.session_state.get("session_play_count", 0)) + 1
     st.session_state.setdefault("session_play_log", [])
+    st.session_state.setdefault("session_ended", False)
     st.session_state["session_play_log"].append(st.session_state.get("active_session_id"))
     st.session_state["session_play_log"] = st.session_state["session_play_log"][-10:]
 
@@ -237,6 +240,11 @@ def _render_left_panel() -> None:
             st.caption(f"Sessions played: {int(st.session_state.get('session_play_count', 0))}")
             st.caption("Recent internal session_ids (hidden from students):")
             st.write(st.session_state.get("session_play_log", []))
+    
+    if st.button("🧾 End session → Results", use_container_width=True, key="btn_end_session"):
+        st.session_state["session_ended"] = True
+        st.session_state["page"] = "Results"
+        st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -252,22 +260,34 @@ def _render_chat_area() -> None:
         st.info("Click **🎲 Load new session** on the left panel.")
         return
 
+    # AUTO END GUARD (put right after "loaded_session" check)
     turns = st.session_state.get("turns_cleaned", []) or []
+    cursor = int(st.session_state.get("cursor", 0) or 0)
     patient_msgs = st.session_state.get("patient_msgs", []) or []
     counselor_msgs = st.session_state.get("counselor_msgs", []) or []
 
-    # end guard
+    # end guard (REPLACE this whole block)
     if (
         turns
         and patient_msgs
-        and int(st.session_state.get("cursor", 0)) >= len(turns)
+        and cursor >= len(turns)
         and len(patient_msgs) == len(counselor_msgs)
     ):
-        st.success("End of scripted patient turns. Go to Results.")
-        if st.button("Go to Results", type="primary", key="btn_go_results"):
-            st.session_state["page"] = "Results"
-            st.rerun()
+        st.success("✅ End of scripted patient turns.")
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("Go to Results", type="primary", key="btn_go_results"):
+                st.session_state["page"] = "Results"
+                st.rerun()
+
+        with c2:
+            if st.button("🎲 Start a new session", key="btn_new_session_after_end"):
+                ok = _load_random_session()
+                st.rerun()
+
         return
+
 
     # render bubbles
     for i, pmsg in enumerate(patient_msgs):
@@ -289,13 +309,18 @@ def _render_chat_area() -> None:
 
     st.session_state["counselor_msgs"].append(user_text)
 
-    labs = label_turn_with_llm(gcall, user_text)
+    # NEW: give the LLM the most recent client turn as context
+    client_prev = ""
+    if st.session_state.get("patient_msgs"):
+        client_prev = st.session_state["patient_msgs"][-1]
+
+    labs = label_turn_with_llm(gcall, user_text, context={"client_prev": client_prev})
     st.session_state.setdefault("turn_labels", []).append(labs)
 
     _update_metrics_summary()
     _advance_to_next_patient()
-
     st.rerun()
+
 
 
 def render() -> None:

@@ -1,14 +1,29 @@
+# pages/results.py
 import json
 import streamlit as st
 from datetime import datetime
 
 from core.llm import gcall
 from core.prompts import OVERALL_FEEDBACK_SYSTEM, build_history
-from core.metrics import parse_session_metrics
+
+from core.metrics import (
+    make_metrics_summary,
+    make_skill_timeseries,
+    turn_warnings,
+)
 
 
+# Micro feedback (fallback) 
+def _clean_json_block(text: str) -> dict:
+    t = (text or "").strip()
+    s, e = t.find("{"), t.rfind("}")
+    if s == -1 or e == -1:
+        return {}
+    try:
+        return json.loads(t[s:e + 1])
+    except Exception:
+        return {}
 
-# Micro feedback (fallback)
 MICRO_FEEDBACK_SYSTEM = """
 You are a counseling supervisor. Given ONE counselor message and its micro-skill flags
 (empathy, reflection, validation, open_question, suggestion: 0/1), produce very concise micro feedback.
@@ -22,24 +37,11 @@ Return STRICT JSON with fields:
   "alt_response": "optional 1-2 sentences better rewrite; neutral tone"
 }
 Output JSON only.
-"""
-
-
-def _clean_json_block(text: str) -> dict:
-    t = (text or "").strip()
-    s, e = t.find("{"), t.rfind("}")
-    if s == -1 or e == -1:
-        return {}
-    try:
-        return json.loads(t[s:e + 1])
-    except Exception:
-        return {}
+""".strip()
 
 
 def gen_micro_feedback_fallback(counselor_text: str, labs: dict) -> dict:
-    flags = {k: int(bool(labs.get(k, 0))) for k in
-             ["empathy", "reflection", "validation", "open_question", "suggestion"]}
-
+    flags = {k: int(bool(labs.get(k, 0))) for k in ["empathy", "reflection", "validation", "open_question", "suggestion"]}
     prompt = f"""{MICRO_FEEDBACK_SYSTEM}
 
 Counselor message:
@@ -49,10 +51,8 @@ Skill flags (0/1):
 {json.dumps(flags)}
 
 JSON:"""
-
     out, _ = gcall(prompt, max_tokens=220, temperature=0.3)
     data = _clean_json_block(out) or {}
-
     return {
         "strength_title": data.get("strength_title", "Strengths"),
         "strength_note": data.get("strength_note", "Good client-centered stance."),
@@ -62,118 +62,148 @@ JSON:"""
     }
 
 
-# Rubric (transparent heuristic)
-def compute_rubric(metrics_summary: dict, labels: list):
-    def clip01(x):
-        try:
-            return max(0.0, min(1.0, float(x)))
-        except Exception:
-            return 0.0
-
-    emp = clip01(metrics_summary.get("Empathy", 0.0))
-    ref = clip01(metrics_summary.get("Reflection", 0.0))
-    oq = clip01(metrics_summary.get("Open Questions", 0.0))
-    val = clip01(metrics_summary.get("Validation", 0.0))
-    sug = clip01(metrics_summary.get("Suggestions", 0.0))
-
-    def score_from_rate(x, good_lo, good_hi):
-        # 0..5 with peak in [good_lo, good_hi]
-        if x <= 0:
-            return 0
-        if x < good_lo:
-            return int(round(5 * (x / good_lo)))
-        if x <= good_hi:
-            return 5
-        # too high -> penalty
-        over = min(1.0, (x - good_hi) / max(1e-6, (1.0 - good_hi)))
-        return max(1, int(round(5 * (1.0 - 0.6 * over))))
-
-    engagement = score_from_rate((oq + ref) / 2, 0.20, 0.55)
-    empathic = score_from_rate((emp + val) / 2, 0.20, 0.60)
-    guidance = score_from_rate(1.0 - sug, 0.55, 0.95)  # less suggestion is better
-    consistency = 5 if (emp + ref + val + oq) > 0.6 else (3 if (emp + ref + val + oq) > 0.3 else 1)
-
-    def note_eng():
-        if engagement >= 4:
-            return "Good balance of reflections and open questions to keep the client talking."
-        if engagement == 3:
-            return "Add a bit more reflection or one open question per turn."
-        return "Try 1 reflection + 1 open question more consistently."
-
-    def note_emp():
-        if empathic >= 4:
-            return "Empathy/validation are present and supportive."
-        if empathic == 3:
-            return "Add explicit validation when emotions show up."
-        return "Name the emotion and validate before moving forward."
-
-    def note_guid():
-        if guidance >= 4:
-            return "Advice is appropriately restrained; client-led pace is maintained."
-        if guidance == 3:
-            return "Reduce suggestions unless the client requests them."
-        return "Pause advice-giving; focus on understanding and eliciting more detail."
-
-    def note_cons():
-        if consistency >= 4:
-            return "Overall stance is consistent across turns."
-        if consistency == 3:
-            return "Try to keep each reply short and client-centered."
-        return "Focus on one skill per reply to avoid scattered responses."
-
-    return [
-        {"dimension": "Engagement", "score": engagement, "note": note_eng()},
-        {"dimension": "Empathic stance", "score": empathic, "note": note_emp()},
-        {"dimension": "Guidance control", "score": guidance, "note": note_guid()},
-        {"dimension": "Consistency", "score": consistency, "note": note_cons()},
-    ]
-
-
-# Rendering helpers
+# UI helpers 
 def _skill_badges(labs: dict) -> str:
-    keys = [("empathy", "Empathy"), ("reflection", "Reflection"), ("validation", "Validation"),
-            ("open_question", "OpenQ"), ("suggestion", "Suggestion")]
+    keys = [
+        ("empathy","Empathy"), ("reflection","Reflection"), ("validation","Validation"),
+        ("open_question","OpenQ"), ("suggestion","Suggestion"),
+        ("cultural_responsiveness","Culture+"), ("stereotype_risk","StereoRisk"),
+        ("goal_alignment","GoalAlign"), ("coherence","Coherence"), ("safety_response","Safety"),
+    ]
     on = [name for k, name in keys if int(bool(labs.get(k, 0))) == 1]
     if not on:
-        return "`No skill detected`"
+        return "`(none)`"
     return " ".join([f"`{x}`" for x in on])
 
 
-def _render_quantitative(metrics_summary: dict):
-    st.subheader("1) Quantitative skill breakdown")
+def _plot_bar(metrics_summary: dict):
+    import matplotlib.pyplot as plt
 
-    if not metrics_summary:
-        st.info("No skill metrics yet (send at least one counselor reply).")
+    labels = list(metrics_summary.keys())
+    vals = [float(metrics_summary[k]) for k in labels]
+
+    fig, ax = plt.subplots(figsize=(6.0, 2.6), dpi=140)
+    ax.bar(labels, vals)
+
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Rate (0-1)")
+    ax.set_params(axis="x", labelrotation=30, labelsize=8)
+    ax.set_params(axis="x", labelsize=8)
+    fig.tight_layout()
+
+    return fig
+
+
+def _plot_timeline(ts: dict):
+    import matplotlib.pyplot as plt
+    fig = plt.figure()
+    for k, series in ts.items():
+        plt.plot(list(range(1, len(series)+1)), series, label=k)
+
+    plt.ylim(0, 1)
+    plt.xlabel("Counselor turn index")
+    plt.ylabel("Cumulative avg rate")
+    plt.legend()
+    st.pyplot(fig, clear_figure=True)
+
+
+# Main sections
+def _render_session_overview(metrics_summary: dict):
+    st.subheader("1) Session overview")
+
+    # Metric cards: core 5
+    core = {
+        "Empathy": metrics_summary.get("Empathy", 0.0),
+        "Reflection": metrics_summary.get("Reflection", 0.0),
+        "Open Questions": metrics_summary.get("Open Questions", 0.0),
+        "Validation": metrics_summary.get("Validation", 0.0),
+        "Suggestions": metrics_summary.get("Suggestions", 0.0),
+    }
+    cols = st.columns(5)
+    for i, (k, v) in enumerate(core.items()):
+        with cols[i]:
+            st.metric(k, f"{v*100:.0f}%")
+
+    st.caption("Tip: Suggestions are not always bad—but frequent advice can reduce client-led exploration.")
+    st.divider()
+
+    # Bar chart: core + extensions (if present)
+    st.markdown("**Skill rates (core + extensions)**")
+    fig = _plot_bar(metrics_summary)
+    st.pyplot(fig, use_container_width=False)
+
+
+def _render_timeline(labels: list[dict]):
+    st.subheader("2) Skill timeline (cumulative average)")
+    if not labels:
+        st.info("No counselor turns yet.")
         return
 
-    st.write(f"- Empathy: {metrics_summary.get('Empathy', 0):.2f}")
-    st.write(f"- Reflection: {metrics_summary.get('Reflection', 0):.2f}")
-    st.write(f"- Open Questions: {metrics_summary.get('Open Questions', 0):.2f}")
-    st.write(f"- Validation: {metrics_summary.get('Validation', 0):.2f}")
-    st.write(f"- Suggestions: {metrics_summary.get('Suggestions', 0):.2f}")
+    keys = ["empathy", "reflection", "validation", "open_question", "suggestion"]
+    ts = make_skill_timeseries(labels, keys)
 
-    st.caption("Tip: Keep Suggestions lower unless the client explicitly asks for advice.")
+    # pretty legend labels (short)
+    pretty = {
+        "empathy": "Empathy",
+        "reflection": "Reflection",
+        "validation": "Validation",
+        "open_question": "OpenQ",
+        "suggestion": "Suggestion",
+    }
+    ts2 = {pretty[k]: ts[k] for k in keys}
+    _plot_timeline(ts2)
 
 
-def _render_turn_coaching_cards(patient_msgs, counselor_msgs, labels):
-    st.subheader("2) Turn-level coaching (micro feedback)")
+def _render_turn_table(patient_msgs, counselor_msgs, labels):
+    st.subheader("3) Turn-level summary (flags + warnings)")
 
     if not counselor_msgs:
         st.info("No counselor turns yet.")
         return
 
+    warns = turn_warnings(patient_msgs, counselor_msgs, labels)
+
+    rows = []
+    for i, ctext in enumerate(counselor_msgs):
+        ptext = patient_msgs[i] if i < len(patient_msgs) else ""
+        lab = labels[i] if i < len(labels) else {}
+        w = warns[i]["warnings"] if i < len(warns) else []
+        rows.append({
+            "turn": i + 1,
+            "client": (ptext[:80] + "…") if len(ptext) > 80 else ptext,
+            "counselor": (ctext[:80] + "…") if len(ctext) > 80 else ctext,
+            "skills": _skill_badges(lab),
+            "warnings": " | ".join(w) if w else "",
+        })
+
+    st.dataframe(rows, use_container_width=True)
+
+
+def _render_turn_coaching_cards(patient_msgs, counselor_msgs, labels):
+    st.subheader("4) Turn-level coaching (micro feedback)")
+
+    if not counselor_msgs:
+        st.info("No counselor turns yet.")
+        return
+
+    warns = turn_warnings(patient_msgs, counselor_msgs, labels)
+
     for i, ctext in enumerate(counselor_msgs):
         ptext = patient_msgs[i] if i < len(patient_msgs) else ""
         labs = labels[i] if i < len(labels) else {}
+        w = warns[i]["warnings"] if i < len(warns) else []
 
-        with st.expander(f"Turn {i + 1}: coaching", expanded=(i == len(counselor_msgs) - 1)):
+        with st.expander(f"Turn {i+1}: coaching", expanded=(i == len(counselor_msgs) - 1)):
             st.markdown("**Client said:**")
             st.write(ptext or "(missing)")
             st.markdown("**Counselor replied:**")
             st.write(ctext)
 
             st.markdown(f"**Detected skills:** {_skill_badges(labs)}")
+            if w:
+                st.warning(" / ".join(w))
 
+            # micro feedback
             try:
                 micro = gen_micro_feedback_fallback(ctext, labs)
             except Exception:
@@ -198,44 +228,23 @@ def _render_turn_coaching_cards(patient_msgs, counselor_msgs, labels):
                 st.write(micro["alt_response"])
 
 
-def _render_rubric(metrics_summary: dict, labels: list):
-    st.subheader("3) Rubric (paper-inspired)")
+def _render_overall_feedback():
+    st.subheader("5) Session-level feedback (LLM)")
 
-    rubric = compute_rubric(metrics_summary or {}, labels or [])
-    cols = st.columns(4)
-    for idx, item in enumerate(rubric):
-        with cols[idx % 4]:
-            st.metric(item["dimension"], f"{item['score']}/5")
-            st.caption(item["note"])
-
-    with st.expander("What this rubric means"):
-        st.markdown(
-            "- **Engagement**: Did you keep the client talking via reflections + open questions?\n"
-            "- **Empathic stance**: Did you name emotions and validate the client?\n"
-            "- **Guidance control**: Did you avoid premature advice-giving?\n"
-            "- **Consistency**: Were your replies reliably brief and client-centered?\n"
-        )
-
-
-def _render_overall_feedback_section():
-    st.markdown("### Session-level feedback (LLM)")
-
-    # button key 꼭 주기 (중복 방지)
-    if st.button("Generate session-level feedback (LLM)", key="btn_results_overall_llm"):
+    if st.button("Generate session-level feedback (LLM)", key="btn_overall_feedback"):
         history_text = build_history(
             st.session_state.get("patient_msgs", []),
-            st.session_state.get("counselor_msgs", []),
+            st.session_state.get("counselor_msgs", [])
         )
         overall_prompt = (
             f"{OVERALL_FEEDBACK_SYSTEM}\n\n"
             f"Conversation (chronological):\n{history_text}\n\n"
-            "Evaluate the counselor's replies in aggregate."
+            "Evaluate the counselor's replies in aggregate. Provide actionable feedback."
         )
         with st.spinner("Generating feedback..."):
             fb_all, _ = gcall(overall_prompt, max_tokens=800, temperature=0.4)
 
         st.session_state["overall_feedback"] = fb_all
-        st.session_state["session_metrics"] = parse_session_metrics(fb_all)
         st.rerun()
 
     if st.session_state.get("overall_feedback"):
@@ -247,68 +256,59 @@ def _render_overall_feedback_section():
 def _render_instructor_tools():
     payload = {
         "ts": datetime.now().isoformat(timespec="seconds"),
-        "user_role": st.session_state.get("user_role"),
-        "instructor_unlocked": st.session_state.get("instructor_unlocked", False),
-
-        # session basics
         "profile": st.session_state.get("profile"),
         "dataset_file": st.session_state.get("ds_file"),
-
-        # conversation
         "patient_msgs": st.session_state.get("patient_msgs", []),
         "counselor_msgs": st.session_state.get("counselor_msgs", []),
-
-        # metrics
         "turn_labels": st.session_state.get("turn_labels", []),
         "metrics_summary": st.session_state.get("metrics_summary", {}),
         "overall_feedback": st.session_state.get("overall_feedback"),
-
-        # internal tracking (hidden to students)
+        # internal id for logging only (not shown to student)
         "active_session_id": st.session_state.get("active_session_id"),
         "removed_dupes": st.session_state.get("removed_dupes", 0),
-        "session_play_count": st.session_state.get("session_play_count", 0),
-        "session_play_log": st.session_state.get("session_play_log", []),
     }
 
-    with st.expander("Instructor tools (download / debug)", expanded=False):
-        st.caption("Visible only when Instructor is unlocked.")
+    with st.expander("Instructor tools", expanded=False):
         st.download_button(
             "Download session JSON",
             data=json.dumps(payload, ensure_ascii=False, indent=2),
-            file_name="practice_session_export.json",
+            file_name="practice_session.json",
             mime="application/json",
             use_container_width=True,
         )
-        st.json(payload.get("metrics_summary", {}))
+        st.json(payload["metrics_summary"])
 
 
-
-# MAIN
 def render():
     st.subheader("Results")
 
-    # session loaded?
     if not st.session_state.get("loaded_session"):
         st.info("No session loaded yet. Go to **Chat** and click **Load new session**.")
         return
 
-    metrics_summary = st.session_state.get("metrics_summary", {}) or {}
     labels = st.session_state.get("turn_labels", []) or []
     patient_msgs = st.session_state.get("patient_msgs", []) or []
     counselor_msgs = st.session_state.get("counselor_msgs", []) or []
 
-    _render_quantitative(metrics_summary)
+    # Build/refresh metrics_summary from labels (more reliable than stale state)
+    metrics_summary = make_metrics_summary(labels)
+    st.session_state["metrics_summary"] = metrics_summary  # keep for downloads
+
+    _render_session_overview(metrics_summary)
+    st.divider()
+
+    _render_timeline(labels)
+    st.divider()
+
+    _render_turn_table(patient_msgs, counselor_msgs, labels)
     st.divider()
 
     _render_turn_coaching_cards(patient_msgs, counselor_msgs, labels)
     st.divider()
 
-    _render_rubric(metrics_summary, labels)
-    st.divider()
+    _render_overall_feedback()
 
-    _render_overall_feedback_section()
-
-    # Instructor-only tools
+    # Instructor-only
     if st.session_state.get("user_role") == "Instructor" and st.session_state.get("instructor_unlocked"):
         st.divider()
         _render_instructor_tools()
