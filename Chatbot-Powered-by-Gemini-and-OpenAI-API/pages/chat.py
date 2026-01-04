@@ -142,58 +142,82 @@ def _choose_dataset_file() -> str | None:
 
 
 def _load_random_session() -> bool:
+    """
+    Load one random session from the intake-matched dataset file.
+    - student_only 데이터만 쓰는 전제라 _is_studentish_session 제거
+    - rewrite_target 필터가 0개를 만들면 자동 fallback (필터 없이 진행)
+    - concerns bias는 "히트가 있으면" 그 subset으로만 랜덤 추출
+    """
+    # 0) 기본값: 어떤 분기에서도 sessions가 미할당 되지 않게
+    sessions: list[dict] = []
+
+    # 1) 데이터 파일 존재 확인
+    files = list_data_files(DATA_ROOT)
+    if not files:
+        st.session_state["_load_err"] = f"No dataset files under {DATA_ROOT}"
+        return False
+
+    # 2) intake 기반 dataset 선택 (네가 이미 만들어둔 함수)
     ds_file = _choose_dataset_file()
     if not ds_file:
+        # _choose_dataset_file() 내부에서 _load_err 세팅하는 스타일이면 그대로 두면 됨
+        st.session_state.setdefault("_load_err", "No dataset file chosen.")
         return False
 
     st.session_state["ds_file"] = ds_file
     st.session_state["session_ended"] = False
 
-    
+    # 3) 세션 로드
+    max_rows = int(st.session_state.get("max_rows", 20000) or 20000)
+    sessions = load_sessions_any(ds_file, max_rows=max_rows) or []
 
-    EXCLUDE_PAT = re.compile(r"\b(daughter|son|my kid|my kids|husband|wife|marriage|divorce|custody|childcare|pregnan)\b", re.I)
+    if not sessions:
+        st.session_state["_load_err"] = f"No sessions loaded. file={ds_file}"
+        return False
 
-    def _is_studentish_session(sess: dict) -> bool:
-        turns = get_turns(sess)
-        text = " ".join([(t.get("text") or "") for t in turns[:8]]).lower()
-        if EXCLUDE_PAT.search(text):
-            return False
-        # optional: 학업/캠퍼스 키워드가 최소 1개는 있어야
-        include = any(k in text for k in ["class", "exam", "homework", "professor", "campus", "semester", "major", "assignment"])
-        return include
-    
-    sessions = [s for s in sessions if _is_studentish_session(s)]
-    sessions = load_sessions_any(ds_file, max_rows=int(st.session_state.get("max_rows", 20000)))
-    sessions = filter_sessions(sessions, st.session_state.get("rewrite_target"))
+    # 4) rewrite_target 필터 (0개면 자동 fallback)
+    rt = st.session_state.get("rewrite_target")
+    if rt:
+        filtered = filter_sessions(sessions, rt) or []
+        if filtered:
+            sessions = filtered
+        else:
+            # 필터 문구 mismatch여도 앱이 멈추지 않게
+            st.session_state["_load_warn"] = (
+                "rewrite_target filter matched 0 sessions; falling back to unfiltered sessions.\n"
+                f"rewrite_target={rt}"
+            )
 
-    # bias by Intake concerns
+    # 5) Intake concerns bias (히트가 있으면 그 subset)
     prof = st.session_state.get("profile") or {}
     concerns = prof.get("concerns") or prof.get("concern_tags") or []
-    concerns = [c.strip().lower() for c in concerns if str(c).strip()]
+    concerns = [str(c).strip().lower() for c in concerns if str(c).strip()]
 
     if concerns:
-        def _score(sess):
+        def _score(sess: dict) -> int:
             turns = get_turns(sess) or []
             blob = " ".join([(t.get("text") or "") for t in turns]).lower()
             return sum(1 for c in concerns if c in blob)
 
         scored = [(s, _score(s)) for s in sessions]
-        # keep sessions with >=1 hit; if none, fall back to original
         hit = [s for (s, sc) in scored if sc > 0]
         if hit:
             sessions = hit
 
+    # 6) 최종 방어
     if not sessions:
         st.session_state["_load_err"] = (
             "No sessions found after filtering.\n"
             f"file={ds_file}\n"
             f"rewrite_target={st.session_state.get('rewrite_target')}\n"
-            f"max_rows={int(st.session_state.get('max_rows', 20000))}"
+            f"max_rows={max_rows}"
         )
         return False
 
+    # 7) 랜덤 선택 + 정리
     s = pick_random_session(sessions)
     turns_raw = get_turns(s)
+
     turns_cleaned, qc = qc_clean_turns(
         turns_raw,
         remove_consecutive_dupes=bool(st.session_state.get("dedupe", True)),
@@ -208,7 +232,7 @@ def _load_random_session() -> bool:
     else:
         turns_display = turns_cleaned
 
-    # reset per-session state
+    # 8) per-session state reset
     st.session_state["loaded_session"] = s
     st.session_state["turns_cleaned"] = turns_display
     st.session_state["qc"] = qc
@@ -218,16 +242,19 @@ def _load_random_session() -> bool:
     st.session_state["turn_labels"] = []
     st.session_state["metrics_summary"] = {}
     st.session_state["overall_feedback"] = None
-    st.session_state.pop("_load_err", None)
 
-    # play counter/log (internal)
-    st.session_state["session_play_count"] = int(st.session_state.get("session_play_count", 0)) + 1
+    st.session_state.pop("_load_err", None)
+    # 경고는 유지해도 되지만, 이전 경고가 남는 게 싫으면 다음 줄 uncomment
+    # st.session_state.pop("_load_warn", None)
+
+    # 9) play counter/log (internal)
+    st.session_state["session_play_count"] = int(st.session_state.get("session_play_count", 0) or 0) + 1
     st.session_state.setdefault("session_play_log", [])
     st.session_state.setdefault("session_ended", False)
     st.session_state["session_play_log"].append(st.session_state.get("active_session_id"))
     st.session_state["session_play_log"] = st.session_state["session_play_log"][-10:]
 
-    # advance to first patient
+    # 10) advance to first patient
     _advance_to_next_patient()
 
     if len(st.session_state.get("patient_msgs", [])) == 0:
