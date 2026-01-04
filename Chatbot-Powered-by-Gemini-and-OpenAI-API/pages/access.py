@@ -2,38 +2,117 @@ import streamlit as st
 
 PIN = "1234"
 
+
+def _apply_access_css():
+    st.markdown(
+        """
+        <style>
+        /* page vertical position: move content up a bit */
+        .access-wrap { margin-top: -40px; }
+
+        /* big clickable card */
+        .access-card {
+            position: relative;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.02);
+            border-radius: 12px;
+            padding: 22px 18px;
+            text-align: center;
+            width: 100%;
+        }
+        .access-title {
+            font-weight: 650;
+            font-size: 16px;
+            margin-bottom: 6px;
+        }
+        .access-desc {
+            opacity: 0.75;
+            font-size: 13px;
+        }
+
+        /* overlay streamlit button to capture click */
+        div[data-testid="stButton"] > button.access-overlay {
+            position: absolute !important;
+            inset: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            opacity: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render():
-    st.title("🧠 AI Counselor Simulation")
-    st.caption("Choose your access type to begin.")
+    _apply_access_css()
 
-    st.markdown("### Access")
-    role = st.radio("View as", ["Student", "Instructor"], horizontal=True, key="access_role")
+    st.markdown('<div class="access-wrap">', unsafe_allow_html=True)
+    st.title("Access")
+    st.caption("Choose how you want to use this app.")
+    st.write("")
 
-    if role == "Student":
-        if st.button("Continue as Student", type="primary", use_container_width=True, key="btn_student"):
-            st.session_state["user_role"] = "Student"
-            st.session_state["instructor_unlocked"] = False
-            st.session_state["page"] = "Intake"
-            st.rerun()
-        return
+    # centered + stacked
+    col = st.columns([0.18, 0.64, 0.18])[1]
 
-    # Instructor
-    st.info("Instructor mode requires a PIN.")
-    pin = st.text_input("Instructor PIN", type="password", key="access_pin")
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("Unlock & Continue", type="primary", use_container_width=True, key="btn_instructor"):
-            ok = (pin == PIN)
-            st.session_state["user_role"] = "Instructor"
-            st.session_state["instructor_unlocked"] = bool(ok)
-            if ok:
-                st.session_state["page"] = "Results"   # 원하면 "Intake"로 바꿔도 됨
+    with col:
+        # Student card
+        c1 = st.container()
+        with c1:
+            st.markdown(
+                """
+                <div class="access-card">
+                    <div class="access-title">Student</div>
+                    <div class="access-desc">Create a client profile and practice counseling.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("\u200b", key="btn_student_card", help="Student", type="secondary"):
+                st.session_state["user_role"] = "Student"
+                st.session_state["page"] = "Intake"
                 st.rerun()
-            else:
-                st.error("Wrong PIN. Please try again.")
-    with col2:
-        if st.button("Back", use_container_width=True, key="btn_back"):
-            st.session_state["access_role"] = "Student"
-            st.session_state["access_pin"] = ""
-            st.rerun()
+            # make the button overlay this card
+            st.markdown(
+                """
+                <script>
+                const b = window.parent.document.querySelector('button[kind="secondary"][data-testid="baseButton-secondary"]:last-child');
+                if (b) b.classList.add("access-overlay");
+                </script>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.write("")
+
+        # --- Instructor card ---
+        c2 = st.container()
+        with c2:
+            st.markdown(
+                """
+                <div class="access-card">
+                    <div class="access-title">Instructor</div>
+                    <div class="access-desc">Unlock instructor tools and downloads (PIN required).</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("\u200b", key="btn_instructor_card", help="Instructor", type="secondary"):
+                st.session_state["user_role"] = "Instructor"
+                st.session_state["page"] = "Intake"   # 또는 Instructor gate page가 있으면 거기로
+                st.rerun()
+            st.markdown(
+                """
+                <script>
+                const buttons = window.parent.document.querySelectorAll('button[kind="secondary"][data-testid="baseButton-secondary"]');
+                if (buttons.length) buttons[buttons.length-1].classList.add("access-overlay");
+                </script>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("</div>", unsafe_allow_html=True)
