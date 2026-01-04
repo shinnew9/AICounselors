@@ -89,7 +89,7 @@ def render():
 
         st.write("")
 
-        # --- Instructor card ---
+        # Instructor card
         c2 = st.container()
         with c2:
             st.markdown(
