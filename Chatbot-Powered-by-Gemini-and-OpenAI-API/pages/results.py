@@ -13,16 +13,18 @@ from core.metrics import (
 )
 
 
-# Micro feedback (fallback) 
+
+# Micro feedback (fallback)
 def _clean_json_block(text: str) -> dict:
     t = (text or "").strip()
     s, e = t.find("{"), t.rfind("}")
     if s == -1 or e == -1:
         return {}
     try:
-        return json.loads(t[s:e + 1])
+        return json.loads(t[s : e + 1])
     except Exception:
         return {}
+
 
 MICRO_FEEDBACK_SYSTEM = """
 You are a counseling supervisor. Given ONE counselor message and its micro-skill flags
@@ -62,13 +64,66 @@ JSON:"""
     }
 
 
-# UI helpers 
+# UI helpers
+def _apply_results_css():
+    st.markdown(
+        """
+        <style>
+          /* Centered content wrapper for transcript */
+          .results-wrap { max-width: 980px; margin: 0 auto; }
+
+          /* Bubble system (match chat feel) */
+          .bubble-row { display: flex; margin: 0.35rem 0; }
+          .bubble-row.left  { justify-content: flex-start; }
+          .bubble-row.right { justify-content: flex-end; }
+
+          .bubble {
+            max-width: 72%;
+            padding: 10px 12px;
+            border-radius: 16px;
+            line-height: 1.35;
+            font-size: 0.95rem;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.92);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+          }
+          hr {
+            margin-top: 2.0rem !important;
+            margin-bottom: 2.0rem !important;
+            opacity: 0.25;
+          }
+          .bubble.user {
+            background: rgba(0, 122, 255, 0.16);
+            border-color: rgba(0, 122, 255, 0.26);
+          }
+          .bubble.assistant {
+            background: rgba(255,255,255,0.04);
+            border-color: rgba(255,255,255,0.10);
+          }
+          
+
+          /* Give plots less vertical dominance */
+          .small-plot-note { opacity: 0.75; font-size: 0.9rem; margin-top: -0.25rem; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _skill_badges(labs: dict) -> str:
     keys = [
-        ("empathy","Empathy"), ("reflection","Reflection"), ("validation","Validation"),
-        ("open_question","OpenQ"), ("suggestion","Suggestion"),
-        ("cultural_responsiveness","Culture+"), ("stereotype_risk","StereoRisk"),
-        ("goal_alignment","GoalAlign"), ("coherence","Coherence"), ("safety_response","Safety"),
+        ("empathy", "Empathy"),
+        ("reflection", "Reflection"),
+        ("validation", "Validation"),
+        ("open_question", "OpenQ"),
+        ("suggestion", "Suggestion"),
+        ("cultural_responsiveness", "Culture+"),
+        ("stereotype_risk", "StereoRisk"),
+        ("goal_alignment", "GoalAlign"),
+        ("coherence", "Coherence"),
+        ("safety_response", "Safety"),
     ]
     on = [name for k, name in keys if int(bool(labs.get(k, 0))) == 1]
     if not on:
@@ -76,35 +131,66 @@ def _skill_badges(labs: dict) -> str:
     return " ".join([f"`{x}`" for x in on])
 
 
+def _has_any_signal(metrics_summary: dict) -> bool:
+    if not metrics_summary:
+        return False
+    try:
+        return any(float(v) > 0 for v in metrics_summary.values())
+    except Exception:
+        return False
+
+
+# Plotters
 def _plot_bar(metrics_summary: dict):
+    """
+    Returns fig or None (if empty/all-zero).
+    """
+    if not metrics_summary or not _has_any_signal(metrics_summary):
+        return None
+
     import matplotlib.pyplot as plt
 
     labels = list(metrics_summary.keys())
     vals = [float(metrics_summary[k]) for k in labels]
 
-    fig, ax = plt.subplots(figsize=(6.0, 2.6), dpi=140)
+    # smaller & tighter
+    fig, ax = plt.subplots(figsize=(5.2, 2.2), dpi=140)
     ax.bar(labels, vals)
-
     ax.set_ylim(0, 1)
-    ax.set_ylabel("Rate (0-1)")
-    ax.set_params(axis="x", labelrotation=30, labelsize=8)
-    ax.set_params(axis="x", labelsize=8)
-    fig.tight_layout()
+    ax.set_ylabel("Rate (0–1)")
 
+    ax.tick_params(axis="x", labelrotation=30, labelsize=8)
+    ax.tick_params(axis="y", labelsize=8)
+
+    fig.tight_layout()
     return fig
 
 
 def _plot_timeline(ts: dict):
-    import matplotlib.pyplot as plt
-    fig = plt.figure()
-    for k, series in ts.items():
-        plt.plot(list(range(1, len(series)+1)), series, label=k)
+    """
+    Returns fig or None
+    """
+    if not ts:
+        return None
+    # if all series empty or all zeros, skip
+    try:
+        if not any(any(float(x) > 0 for x in series) for series in ts.values()):
+            return None
+    except Exception:
+        pass
 
-    plt.ylim(0, 1)
-    plt.xlabel("Counselor turn index")
-    plt.ylabel("Cumulative avg rate")
-    plt.legend()
-    st.pyplot(fig, clear_figure=True)
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(5.2, 2.4), dpi=140)
+    for k, series in ts.items():
+        ax.plot(list(range(1, len(series) + 1)), series, label=k)
+
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Counselor turn index")
+    ax.set_ylabel("Cumulative avg rate")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
 
 
 # Main sections
@@ -129,14 +215,52 @@ def _render_session_overview(metrics_summary: dict):
 
     # Bar chart: core + extensions (if present)
     st.markdown("**Skill rates (core + extensions)**")
+    st.markdown('<div class="small-plot-note">Plots are hidden when metrics are all-zero.</div>', unsafe_allow_html=True)
+
     fig = _plot_bar(metrics_summary)
-    st.pyplot(fig, use_container_width=False)
+    if fig is None:
+        st.info("No detected skills yet for this session (all rates are 0).")
+        return
+
+    st.pyplot(fig, use_container_width=True, clear_figure=True)
+
+
+def _render_transcript(patient_msgs, counselor_msgs):
+    """
+    4-1: Better transcript UI: centered wrapper + chat bubbles.
+    """
+    st.subheader("Session transcript")
+
+    if not patient_msgs and not counselor_msgs:
+        st.info("No transcript yet. Complete a chat session first.")
+        return
+
+    # Pairwise render: patient[i] then counselor[i]
+    st.markdown('<div class="results-wrap">', unsafe_allow_html=True)
+
+    n = max(len(patient_msgs), len(counselor_msgs))
+    for i in range(n):
+        if i < len(patient_msgs):
+            p = patient_msgs[i] or ""
+            st.markdown(
+                f'<div class="bubble-row left"><div class="bubble assistant">{p}</div></div>',
+                unsafe_allow_html=True,
+            )
+        if i < len(counselor_msgs):
+            c = counselor_msgs[i] or ""
+            st.markdown(
+                f'<div class="bubble-row right"><div class="bubble user">{c}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_timeline(labels: list[dict]):
     st.subheader("2) Skill timeline (cumulative average)")
+
     if not labels:
-        st.info("No counselor turns yet.")
+        st.info("No counselor turns labeled yet.")
         return
 
     keys = ["empathy", "reflection", "validation", "open_question", "suggestion"]
@@ -151,7 +275,13 @@ def _render_timeline(labels: list[dict]):
         "suggestion": "Suggestion",
     }
     ts2 = {pretty[k]: ts[k] for k in keys}
-    _plot_timeline(ts2)
+
+    fig = _plot_timeline(ts2)
+    if fig is None:
+        st.info("Timeline hidden (no signal yet).")
+        return
+
+    st.pyplot(fig, use_container_width=True, clear_figure=True)
 
 
 def _render_turn_table(patient_msgs, counselor_msgs, labels):
@@ -168,13 +298,15 @@ def _render_turn_table(patient_msgs, counselor_msgs, labels):
         ptext = patient_msgs[i] if i < len(patient_msgs) else ""
         lab = labels[i] if i < len(labels) else {}
         w = warns[i]["warnings"] if i < len(warns) else []
-        rows.append({
-            "turn": i + 1,
-            "client": (ptext[:80] + "…") if len(ptext) > 80 else ptext,
-            "counselor": (ctext[:80] + "…") if len(ctext) > 80 else ctext,
-            "skills": _skill_badges(lab),
-            "warnings": " | ".join(w) if w else "",
-        })
+        rows.append(
+            {
+                "turn": i + 1,
+                "client": (ptext[:80] + "…") if len(ptext) > 80 else ptext,
+                "counselor": (ctext[:80] + "…") if len(ctext) > 80 else ctext,
+                "skills": _skill_badges(lab),
+                "warnings": " | ".join(w) if w else "",
+            }
+        )
 
     st.dataframe(rows, use_container_width=True)
 
@@ -234,7 +366,7 @@ def _render_overall_feedback():
     if st.button("Generate session-level feedback (LLM)", key="btn_overall_feedback"):
         history_text = build_history(
             st.session_state.get("patient_msgs", []),
-            st.session_state.get("counselor_msgs", [])
+            st.session_state.get("counselor_msgs", []),
         )
         overall_prompt = (
             f"{OVERALL_FEEDBACK_SYSTEM}\n\n"
@@ -280,6 +412,7 @@ def _render_instructor_tools():
 
 
 def render():
+    _apply_results_css()
     st.subheader("Results")
 
     if not st.session_state.get("loaded_session"):
@@ -290,11 +423,26 @@ def render():
     patient_msgs = st.session_state.get("patient_msgs", []) or []
     counselor_msgs = st.session_state.get("counselor_msgs", []) or []
 
-    # Build/refresh metrics_summary from labels (more reliable than stale state)
+    # DEBUG 유지
+    st.caption(f"DEBUG: #labels={len(labels)} #counselor={len(counselor_msgs)}")
+
+    # labels가 없으면: 결과 계산/그래프를 안 그림 (빈 plot 방지)
+    if not labels:
+        st.warning("No skill labels yet. Finish at least 1 counselor turn (or check labeling pipeline).")
+
+        with st.expander("Show transcript", expanded=True):
+            _render_transcript(patient_msgs, counselor_msgs)
+        return
+
+    # metrics
     metrics_summary = make_metrics_summary(labels)
-    st.session_state["metrics_summary"] = metrics_summary  # keep for downloads
+    st.session_state["metrics_summary"] = metrics_summary
 
     _render_session_overview(metrics_summary)
+    st.divider()
+
+    with st.expander("Show transcript", expanded=False):
+        _render_transcript(patient_msgs, counselor_msgs)
     st.divider()
 
     _render_timeline(labels)
@@ -308,7 +456,7 @@ def render():
 
     _render_overall_feedback()
 
-    # Instructor-only
     if st.session_state.get("user_role") == "Instructor" and st.session_state.get("instructor_unlocked"):
         st.divider()
         _render_instructor_tools()
+
