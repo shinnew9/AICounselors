@@ -19,7 +19,7 @@ __pycache__/
 logs/
 
 # Large/local data (psydial4)
-data/psydial4
-data/DataTranslationAllAtOnce_ver2_clean.ipynb
-data/PsyDial-en-dialogues-clean.txt
-data/data_sampling.ipynb
+Chatbot-Powered-by-Gemini-and-OpenAI-API/data/psydial4
+Chatbot-Powered-by-Gemini-and-OpenAI-API/data/DataTranslationAllAtOnce_ver2_clean.ipynb
+Chatbot-Powered-by-Gemini-and-OpenAI-API/data/PsyDial-en-dialogues-clean.txt
+Chatbot-Powered-by-Gemini-and-OpenAI-API/data/data_sampling.ipynb
