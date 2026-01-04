@@ -14,72 +14,161 @@ def access_screen():
     st.markdown(
         """
         <style>
-          .access-wrap { max-width: 900px; margin: 3.5rem auto 0 auto; }
-          .access-title { font-size: 2rem; font-weight: 700; margin-bottom: 0.25rem; }
-          .access-sub { opacity: 0.75; margin-bottom: 1.5rem; }
+          .access-outer {
+            min-height: 72vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }
+          .access-wrap { width: 100%; max-width: 720px; }
+          .access-title { font-size: 2.2rem; font-weight: 800; margin-bottom: 0.25rem; }
+          .access-sub { opacity: 0.75; margin-bottom: 1.6rem; }
 
-          /* Card-like buttons */
+          /* BIG stacked card buttons */
           div[data-testid="stButton"] > button.access-card {
             width: 100%;
-            height: 140px;
+            height: 110px;
             border-radius: 16px;
-            border: 1px solid rgba(255,255,255,0.10);
-            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.05);
             color: white;
             font-size: 1.25rem;
-            font-weight: 700;
+            font-weight: 800;
             transition: transform .08s ease, background .15s ease, border-color .15s ease;
           }
           div[data-testid="stButton"] > button.access-card:hover {
-            background: rgba(255,255,255,0.08);
-            border-color: rgba(255,255,255,0.22);
             transform: translateY(-2px);
-          }
-          /* Instructor hover tint */
-          div[data-testid="stButton"] > button.access-card.instructor:hover {
-            background: rgba(255, 69, 96, 0.12);
-            border-color: rgba(255, 69, 96, 0.35);
+            background: rgba(255,255,255,0.09);
+            border-color: rgba(255,255,255,0.25);
           }
           /* Student hover tint */
           div[data-testid="stButton"] > button.access-card.student:hover {
-            background: rgba(0, 122, 255, 0.12);
-            border-color: rgba(0, 122, 255, 0.35);
+            background: rgba(0, 122, 255, 0.14);
+            border-color: rgba(0, 122, 255, 0.40);
+          }
+          /* Instructor hover tint */
+          div[data-testid="stButton"] > button.access-card.instructor:hover {
+            background: rgba(255, 69, 96, 0.14);
+            border-color: rgba(255, 69, 96, 0.40);
           }
 
-          .access-hint { font-size: 0.95rem; opacity: 0.7; margin-top: 0.35rem; }
+          .access-hint { margin: 0.35rem 0 1.2rem 0; opacity: 0.75; font-size: 0.95rem; }
+          .spacer { height: 0.6rem; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="access-wrap">', unsafe_allow_html=True)
+    st.markdown('<div class="access-outer"><div class="access-wrap">', unsafe_allow_html=True)
     st.markdown('<div class="access-title">Access</div>', unsafe_allow_html=True)
     st.markdown('<div class="access-sub">Choose how you want to use this app.</div>', unsafe_allow_html=True)
 
-    c1, c2 = st.columns(2, gap="large")
+    # Student (top)
+    if st.button("Student", key="access_student", use_container_width=True):
+        st.session_state["user_role"] = "Student"
+        st.session_state["instructor_unlocked"] = False
+        st.session_state["access_done"] = True
+        st.session_state["page"] = "Intake"
+        st.rerun()
+    st.caption("Create a client profile and practice counseling.")
+    st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
 
-    with c1:
-        # "access-card student" 클래스를 button에 먹이기 위해 label을 HTML로 넣는 꼼수 사용
-        if st.button("Student", key="access_student"):
-            st.session_state["user_role"] = "Student"
-            st.session_state["instructor_unlocked"] = False
-            st.session_state["access_done"] = True
-            st.session_state["page"] = "Intake"
-            st.rerun()
+    # Instructor (bottom)
+    if st.button("Instructor", key="access_instructor", use_container_width=True):
+        st.session_state["user_role"] = "Instructor"
+        st.session_state["access_done"] = True
+        st.session_state["page"] = "Instructor PIN"
+        st.rerun()
+    st.caption("Unlock instructor tools and downloads (PIN required).")
 
-        # 버튼 클래스 주입 (Streamlit 기본 버튼에 class를 직접 못 주니, 아래 JS 없이 가장 안정적인 방식은
-        # "버튼을 만든 다음 CSS로 nth-of-type을 잡는 방법"인데 페이지 구조가 바뀌면 깨질 수 있음.
-        # 그래서 여기서는 'st.button'을 그대로 쓰고, 아래에서 간단히 카드 느낌만 적용.
-        st.caption("Create a client profile and practice counseling.")
-    with c2:
-        if st.button("Instructor", key="access_instructor"):
-            st.session_state["user_role"] = "Instructor"
-            st.session_state["access_done"] = True
-            st.session_state["page"] = "Instructor PIN"
-            st.rerun()
-        st.caption("Unlock instructor tools and downloads (PIN required).")
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    # attach classes to the two buttons (Streamlit button 자체에 class를 못 달아서 CSS selector로 처리)
+    st.markdown(
+        """
+        <script>
+        // best-effort: add classes to the first two buttons on the page
+        const btns = window.parent.document.querySelectorAll('button[kind="secondary"], button[kind="primary"]');
+        // Streamlit 내부 구조가 바뀌면 깨질 수 있지만, 현재는 안정적으로 동작하는 편
+        if (btns.length >= 2) {
+          btns[0].classList.add("access-card", "student");
+          btns[1].classList.add("access-card", "instructor");
+        }
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# def access_screen():
+#     st.markdown(
+#         """
+#         <style>
+#           .access-wrap { max-width: 900px; margin: 3.5rem auto 0 auto; }
+#           .access-title { font-size: 2rem; font-weight: 700; margin-bottom: 0.25rem; }
+#           .access-sub { opacity: 0.75; margin-bottom: 1.5rem; }
+
+#           /* Card-like buttons */
+#           div[data-testid="stButton"] > button.access-card {
+#             width: 100%;
+#             height: 140px;
+#             border-radius: 16px;
+#             border: 1px solid rgba(255,255,255,0.10);
+#             background: rgba(255,255,255,0.04);
+#             color: white;
+#             font-size: 1.25rem;
+#             font-weight: 700;
+#             transition: transform .08s ease, background .15s ease, border-color .15s ease;
+#           }
+#           div[data-testid="stButton"] > button.access-card:hover {
+#             background: rgba(255,255,255,0.08);
+#             border-color: rgba(255,255,255,0.22);
+#             transform: translateY(-2px);
+#           }
+#           /* Instructor hover tint */
+#           div[data-testid="stButton"] > button.access-card.instructor:hover {
+#             background: rgba(255, 69, 96, 0.12);
+#             border-color: rgba(255, 69, 96, 0.35);
+#           }
+#           /* Student hover tint */
+#           div[data-testid="stButton"] > button.access-card.student:hover {
+#             background: rgba(0, 122, 255, 0.12);
+#             border-color: rgba(0, 122, 255, 0.35);
+#           }
+
+#           .access-hint { font-size: 0.95rem; opacity: 0.7; margin-top: 0.35rem; }
+#         </style>
+#         """,
+#         unsafe_allow_html=True,
+#     )
+
+#     st.markdown('<div class="access-wrap">', unsafe_allow_html=True)
+#     st.markdown('<div class="access-title">Access</div>', unsafe_allow_html=True)
+#     st.markdown('<div class="access-sub">Choose how you want to use this app.</div>', unsafe_allow_html=True)
+
+#     c1, c2 = st.columns(2, gap="large")
+
+#     with c1:
+#         # "access-card student" 클래스를 button에 먹이기 위해 label을 HTML로 넣는 꼼수 사용
+#         if st.button("Student", key="access_student"):
+#             st.session_state["user_role"] = "Student"
+#             st.session_state["instructor_unlocked"] = False
+#             st.session_state["access_done"] = True
+#             st.session_state["page"] = "Intake"
+#             st.rerun()
+
+#         # 버튼 클래스 주입 (Streamlit 기본 버튼에 class를 직접 못 주니, 아래 JS 없이 가장 안정적인 방식은
+#         # "버튼을 만든 다음 CSS로 nth-of-type을 잡는 방법"인데 페이지 구조가 바뀌면 깨질 수 있음.
+#         # 그래서 여기서는 'st.button'을 그대로 쓰고, 아래에서 간단히 카드 느낌만 적용.
+#         st.caption("Create a client profile and practice counseling.")
+#     with c2:
+#         if st.button("Instructor", key="access_instructor"):
+#             st.session_state["user_role"] = "Instructor"
+#             st.session_state["access_done"] = True
+#             st.session_state["page"] = "Instructor PIN"
+#             st.rerun()
+#         st.caption("Unlock instructor tools and downloads (PIN required).")
+
+#     st.markdown("</div>", unsafe_allow_html=True)
 
 
 def instructor_pin_screen():
