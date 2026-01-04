@@ -113,7 +113,13 @@ def _advance_to_next_patient() -> None:
 
 
 def _choose_dataset_file() -> str | None:
-    files = list_data_files(DATA_ROOT)
+    files = list_data_files(DATA_ROOT) or []
+
+    ds_file = st.session_state.get("ds_file")
+    
+    if ds_file and ds_file in files:
+        return ds_file
+    
     if not files:
         st.session_state["_load_err"] = f"No dataset files under {DATA_ROOT}"
         return None
@@ -137,6 +143,10 @@ def _choose_dataset_file() -> str | None:
         for f in files:
             if want_hint in f.lower():
                 return f
+            
+    ds_file = st.session_state.get("ds_file")
+    if ds_file and ds_file in files:
+        return ds_file
 
     return files[0]
 
@@ -157,7 +167,7 @@ def _load_random_session() -> bool:
         st.session_state["_load_err"] = f"No dataset files under {DATA_ROOT}"
         return False
 
-    # 2) intake 기반 dataset 선택 (네가 이미 만들어둔 함수)
+    # 2) intake 기반 dataset 선택
     ds_file = _choose_dataset_file()
     if not ds_file:
         # _choose_dataset_file() 내부에서 _load_err 세팅하는 스타일이면 그대로 두면 됨
@@ -175,18 +185,7 @@ def _load_random_session() -> bool:
         st.session_state["_load_err"] = f"No sessions loaded. file={ds_file}"
         return False
 
-    # 4) rewrite_target 필터 (0개면 자동 fallback)
-    rt = st.session_state.get("rewrite_target")
-    if rt:
-        filtered = filter_sessions(sessions, rt) or []
-        if filtered:
-            sessions = filtered
-        else:
-            # 필터 문구 mismatch여도 앱이 멈추지 않게
-            st.session_state["_load_warn"] = (
-                "rewrite_target filter matched 0 sessions; falling back to unfiltered sessions.\n"
-                f"rewrite_target={rt}"
-            )
+    # 4) rewrite_target 필터 (0개면 자동 fallback) -> 지움
 
     # 5) Intake concerns bias (히트가 있으면 그 subset)
     prof = st.session_state.get("profile") or {}
@@ -275,6 +274,18 @@ def _render_left_panel() -> None:
     rt = st.session_state.get("rewrite_target")
     if rt:
         st.caption(f"Dataset: **{rt}**")
+
+    ds = st.session_state.get("ds_file")
+    if ds:
+        st.caption(f"DEBUG file: `{ds}`")
+
+    lsid = st.session_state.get("active_session_id")
+    if lsid:
+        st.caption(f"DEBUG session_id: `{lsid}`")
+
+    warn = st.session_state.get("_load_warn")
+    if warn:
+        st.warning(warn)
 
     st.divider()
 

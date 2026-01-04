@@ -5,6 +5,12 @@ from datetime import datetime
 from core_ui.state import reset_chat_state
 
 
+DATASET_BY_RACE = {
+    "African American": "data/psydial4/student_only_rewrite_african_american_college_grad_100.jsonl",
+    "Hispanic": "data/psydial4/student_only_rewrite_hispanic_college_grad_100.jsonl",
+}
+
+
 def render():
     st.write("INTAKE FILE:", os.path.abspath(__file__))
     st.subheader("Intake Survey (Create a client profile)")
@@ -55,6 +61,9 @@ def render():
             st.session_state["rewrite_target"] = "Hispanic college student"
         else:
             st.session_state["rewrite_target"] = None
+
+        st.session_state["ds_file"] = None
+        st.session_state["loaded_session"] = None
 
         reset_chat_state(keep_profile=True)
         st.session_state["page"] = "Chat"
