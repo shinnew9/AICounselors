@@ -149,8 +149,39 @@ def _load_random_session() -> bool:
     st.session_state["ds_file"] = ds_file
     st.session_state["session_ended"] = False
 
+    
+
+    EXCLUDE_PAT = re.compile(r"\b(daughter|son|my kid|my kids|husband|wife|marriage|divorce|custody|childcare|pregnan)\b", re.I)
+
+    def _is_studentish_session(sess: dict) -> bool:
+        turns = get_turns(sess)
+        text = " ".join([(t.get("text") or "") for t in turns[:8]]).lower()
+        if EXCLUDE_PAT.search(text):
+            return False
+        # optional: 학업/캠퍼스 키워드가 최소 1개는 있어야
+        include = any(k in text for k in ["class", "exam", "homework", "professor", "campus", "semester", "major", "assignment"])
+        return include
+    
+    sessions = [s for s in sessions if _is_studentish_session(s)]
     sessions = load_sessions_any(ds_file, max_rows=int(st.session_state.get("max_rows", 20000)))
     sessions = filter_sessions(sessions, st.session_state.get("rewrite_target"))
+
+    # bias by Intake concerns
+    prof = st.session_state.get("profile") or {}
+    concerns = prof.get("concerns") or prof.get("concern_tags") or []
+    concerns = [c.strip().lower() for c in concerns if str(c).strip()]
+
+    if concerns:
+        def _score(sess):
+            turns = get_turns(sess) or []
+            blob = " ".join([(t.get("text") or "") for t in turns]).lower()
+            return sum(1 for c in concerns if c in blob)
+
+        scored = [(s, _score(s)) for s in sessions]
+        # keep sessions with >=1 hit; if none, fall back to original
+        hit = [s for (s, sc) in scored if sc > 0]
+        if hit:
+            sessions = hit
 
     if not sessions:
         st.session_state["_load_err"] = (
@@ -249,6 +280,60 @@ def _render_left_panel() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _normalize_labs(labs: dict) -> dict:
+    """
+    Normalize LLM label output into DEFAULT_KEYS-compatible {key:0/1}.
+    """
+    if not isinstance(labs, dict):
+        return {}
+
+    alias = {
+        # core
+        "empathy": "empathy",
+        "reflection": "reflection",
+        "validation": "validation",
+        "open_question": "open_question",
+        "open questions": "open_question",
+        "openquestions": "open_question",
+        "openq": "open_question",
+
+        "suggestion": "suggestion",
+        "suggestions": "suggestion",
+        "advice": "suggestion",
+
+        # extensions
+        "cultural_responsiveness": "cultural_responsiveness",
+        "cultural responsiveness": "cultural_responsiveness",
+        "culture": "cultural_responsiveness",
+
+        "stereotype_risk": "stereotype_risk",
+        "stereotype risk": "stereotype_risk",
+
+        "goal_alignment": "goal_alignment",
+        "goal alignment": "goal_alignment",
+
+        "coherence": "coherence",
+
+        "safety_response": "safety_response",
+        "safety response": "safety_response",
+    }
+
+    out = {}
+    for k, v in labs.items():
+        kk = alias.get(str(k).strip().lower())
+        if kk:
+            out[kk] = int(bool(v))
+
+    # IMPORTANT: make sure every DEFAULT_KEYS key exists (prevents missing keys)
+    for kk in [
+        "empathy","reflection","validation","open_question","suggestion",
+        "cultural_responsiveness","stereotype_risk","goal_alignment","coherence","safety_response"
+    ]:
+        out.setdefault(kk, 0)
+
+    return out
+
+
 def _render_chat_area() -> None:
     st.subheader("Chat")
 
@@ -314,8 +399,11 @@ def _render_chat_area() -> None:
     if st.session_state.get("patient_msgs"):
         client_prev = st.session_state["patient_msgs"][-1]
 
-    labs = label_turn_with_llm(gcall, user_text, context={"client_prev": client_prev})
+    raw = label_turn_with_llm(gcall, user_text, context={"client_prev": client_prev})
+    st.session_state.setdefault("turn_labels_raw", []).append(raw)
+    labs = _normalize_labs(raw)
     st.session_state.setdefault("turn_labels", []).append(labs)
+
 
     _update_metrics_summary()
     _advance_to_next_patient()
