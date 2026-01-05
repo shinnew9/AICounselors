@@ -6,8 +6,8 @@ from core_ui.data import (
     DATA_ROOT,
     list_data_files,
     load_sessions_any,
-    filter_sessions,
-    pick_random_session,
+    # filter_sessions,
+    # pick_random_session,
     get_turns,
     qc_clean_turns,
     session_id,
@@ -50,6 +50,14 @@ def _ensure_chat_state_defaults() -> None:
     st.session_state.setdefault("removed_dupes", 0)
     st.session_state.setdefault("session_play_count", 0)
     st.session_state.setdefault("session_play_log", [])
+
+    st.session_state.setdefault("seq_idx_by_ds", {})   # {ds_file: next_index(int)}
+    st.session_state.setdefault("current_session_no", None)  # 1-based display
+
+
+    # # avoid repeating sessions    
+    # st.session_state.setdefault("seen_session_ids", [])
+
 
 
 def _apply_chat_css(panel_open: bool) -> None:
@@ -134,6 +142,9 @@ def _choose_dataset_file() -> str | None:
     elif "hispanic" in race:
         st.session_state["rewrite_target"] = "Hispanic college student"
         want_hint = "hispanic"
+    elif "chinese" in race:
+        st.session_state["rewrite_target"] = "Chinese college student"
+        want_hint = "chinese"
     else:
         st.session_state["rewrite_target"] = st.session_state.get("rewrite_target")
         want_hint = None
@@ -153,31 +164,27 @@ def _choose_dataset_file() -> str | None:
 
 def _load_random_session() -> bool:
     """
-    Load one random session from the intake-matched dataset file.
-    - student_only 데이터만 쓰는 전제라 _is_studentish_session 제거
-    - rewrite_target 필터가 0개를 만들면 자동 fallback (필터 없이 진행)
-    - concerns bias는 "히트가 있으면" 그 subset으로만 랜덤 추출
+    Sequential loader:
+    - ethnicity 선택에 맞는 ds_file을 고른 뒤
+    - 그 파일 안에서 1,2,3... 순서대로 session을 로드
+    - 현재 몇 번째인지 번호(current_session_no)도 기록
     """
-    # 0) 기본값: 어떤 분기에서도 sessions가 미할당 되지 않게
-    sessions: list[dict] = []
-
-    # 1) 데이터 파일 존재 확인
+    # 0) 파일 존재 확인
     files = list_data_files(DATA_ROOT)
     if not files:
         st.session_state["_load_err"] = f"No dataset files under {DATA_ROOT}"
         return False
 
-    # 2) intake 기반 dataset 선택
+    # 1) intake 기반 ds_file 선택
     ds_file = _choose_dataset_file()
     if not ds_file:
-        # _choose_dataset_file() 내부에서 _load_err 세팅하는 스타일이면 그대로 두면 됨
         st.session_state.setdefault("_load_err", "No dataset file chosen.")
         return False
 
     st.session_state["ds_file"] = ds_file
     st.session_state["session_ended"] = False
 
-    # 3) 세션 로드
+    # 2) 세션 로드
     max_rows = int(st.session_state.get("max_rows", 20000) or 20000)
     sessions = load_sessions_any(ds_file, max_rows=max_rows) or []
 
@@ -185,44 +192,29 @@ def _load_random_session() -> bool:
         st.session_state["_load_err"] = f"No sessions loaded. file={ds_file}"
         return False
 
-    # 4) rewrite_target 필터 (0개면 자동 fallback) -> 지움
+    total = len(sessions)
 
-    # 5) Intake concerns bias (히트가 있으면 그 subset)
-    prof = st.session_state.get("profile") or {}
-    concerns = prof.get("concerns") or prof.get("concern_tags") or []
-    concerns = [str(c).strip().lower() for c in concerns if str(c).strip()]
+    # 3) 파일별 next index 가져오기
+    idx_map = st.session_state.get("seq_idx_by_ds") or {}
+    idx = int(idx_map.get(ds_file, 0) or 0)
 
-    if concerns:
-        def _score(sess: dict) -> int:
-            turns = get_turns(sess) or []
-            blob = " ".join([(t.get("text") or "") for t in turns]).lower()
-            return sum(1 for c in concerns if c in blob)
-
-        scored = [(s, _score(s)) for s in sessions]
-        hit = [s for (s, sc) in scored if sc > 0]
-        if hit:
-            sessions = hit
-
-    # 6) 최종 방어
-    if not sessions:
-        st.session_state["_load_err"] = (
-            "No sessions found after filtering.\n"
-            f"file={ds_file}\n"
-            f"rewrite_target={st.session_state.get('rewrite_target')}\n"
-            f"max_rows={max_rows}"
-        )
+    # 끝까지 다 했으면 막기(또는 다시 0으로 리셋)
+    if idx >= total:
+        st.session_state["_load_err"] = f"All sessions completed for this dataset. ({total}/{total})"
+        st.session_state["_load_warn"] = "No more sessions left. (Switch ethnicity/dataset or reset progress.)"
         return False
 
-    # 7) 랜덤 선택 + 정리
-    s = pick_random_session(sessions)
-    turns_raw = get_turns(s)
+    # 4) 이번 session 선택 (순서대로)
+    s = sessions[idx]
 
+    # 5) QC/clean
+    turns_raw = get_turns(s)
     turns_cleaned, qc = qc_clean_turns(
         turns_raw,
         remove_consecutive_dupes=bool(st.session_state.get("dedupe", True)),
     )
 
-    # internal ids (student에게 숨김)
+    # internal ids
     st.session_state["active_session_id"] = str(session_id(s, "session"))
     st.session_state["removed_dupes"] = int(qc.get("removed_dupes", 0))
 
@@ -231,7 +223,7 @@ def _load_random_session() -> bool:
     else:
         turns_display = turns_cleaned
 
-    # 8) per-session state reset
+    # 6) per-session state reset
     st.session_state["loaded_session"] = s
     st.session_state["turns_cleaned"] = turns_display
     st.session_state["qc"] = qc
@@ -243,10 +235,16 @@ def _load_random_session() -> bool:
     st.session_state["overall_feedback"] = None
 
     st.session_state.pop("_load_err", None)
-    # 경고는 유지해도 되지만, 이전 경고가 남는 게 싫으면 다음 줄 uncomment
-    # st.session_state.pop("_load_warn", None)
 
-    # 9) play counter/log (internal)
+    # 7) numbering: 현재 몇 번째 세션인지(1-based)
+    st.session_state["current_session_no"] = idx + 1
+    st.session_state["current_session_total"] = total
+
+    # 8) index advance (다음번엔 다음 세션)
+    idx_map[ds_file] = idx + 1
+    st.session_state["seq_idx_by_ds"] = idx_map
+
+    # 9) play counter/log
     st.session_state["session_play_count"] = int(st.session_state.get("session_play_count", 0) or 0) + 1
     st.session_state.setdefault("session_play_log", [])
     st.session_state.setdefault("session_ended", False)
@@ -267,6 +265,12 @@ def _render_left_panel() -> None:
     st.markdown('<div class="sidepanel-card">', unsafe_allow_html=True)
 
     st.markdown("### Session")
+
+    # NEW: sequential numbering display
+    no = st.session_state.get("current_session_no")
+    total = st.session_state.get("current_session_total")
+    if no and total:
+        st.markdown(f"**Session {int(no)} / {int(total)}**")
 
     prof = st.session_state.get("profile") or {}
     st.caption(f"Client profile: **{prof.get('race_ethnicity', 'Unknown')}**")
@@ -298,7 +302,14 @@ def _render_left_panel() -> None:
         st.session_state["_load_ok"] = bool(ok)
         st.rerun()
 
-    if st.button("Reset chat (keep profile)", use_container_width=True, key="btn_reset_chat"):
+    if st.button("🔁 Reset dataset progress (start from Session 1)", use_container_width=True, key="btn_reset_progress"):
+        ds = st.session_state.get("ds_file")
+        if ds:
+            m = st.session_state.get("seq_idx_by_ds") or {}
+            m[ds] = 0
+            st.session_state["seq_idx_by_ds"] = m
+        st.session_state["current_session_no"] = None
+        st.session_state["current_session_total"] = None
         reset_chat_state(keep_profile=True)
         st.rerun()
 

@@ -8,6 +8,7 @@ from core_ui.state import reset_chat_state
 DATASET_BY_RACE = {
     "African American": "data/psydial4/student_only_rewrite_african_american_college_grad_100.jsonl",
     "Hispanic": "data/psydial4/student_only_rewrite_hispanic_college_grad_100.jsonl",
+    "Chinese": "data/psydial4/student_only_100.jsonl"
 }
 
 
@@ -56,9 +57,11 @@ def render():
 
         # auto set rewrite_target based on intake
         if race == "African American":
-            st.session_state["rewrite_target"] = "African American student"
+            st.session_state["rewrite_target"] = "data/psydial4/student_only_rewrite_african_american_college_grad_100.jsonl"
         elif race == "Hispanic":
-            st.session_state["rewrite_target"] = "Hispanic college student"
+            st.session_state["rewrite_target"] = "data/psydial4/student_only_rewrite_hispanic_college_grad_100.jsonl"
+        elif race == "Chinese":
+            st.session_state["rewrite_target"] = "data/psydial4/student_only_100.jsonl"
         else:
             st.session_state["rewrite_target"] = None
 
