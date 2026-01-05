@@ -123,43 +123,68 @@ def _advance_to_next_patient() -> None:
 def _choose_dataset_file() -> str | None:
     files = list_data_files(DATA_ROOT) or []
 
-    ds_file = st.session_state.get("ds_file")
+    # ds_file = st.session_state.get("ds_file")
     
-    if ds_file and ds_file in files:
-        return ds_file
+    # if ds_file and ds_file in files:
+    #     return ds_file
     
     if not files:
         st.session_state["_load_err"] = f"No dataset files under {DATA_ROOT}"
         return None
+    
+    FILE_MAP = {
+        "Chinese": "student_only_100.jsonl",
+        "Hispanic": "student_only_rewrite_hispanic_college_grad_100.jsonl",
+        "African American": "student_only_rewrite_african_american_college_grad_100.jsonl",
+    }
 
-    prof = st.session_state.get("profile") or {}
-    race = (prof.get("race_ethnicity") or "").lower()
 
-    want_hint = None
-    if "african" in race:
-        st.session_state["rewrite_target"] = "African American student"
-        want_hint = "african"
-    elif "hispanic" in race:
-        st.session_state["rewrite_target"] = "Hispanic college student"
-        want_hint = "hispanic"
-    elif "chinese" in race:
-        st.session_state["rewrite_target"] = "Chinese college student"
-        want_hint = "chinese"
-    else:
-        st.session_state["rewrite_target"] = st.session_state.get("rewrite_target")
-        want_hint = None
+    culture = st.session_state.get("selected_culture")  # culture_select 페이지에서 세팅할 값
+    target = FILE_MAP.get(culture)
 
-    # 힌트 기반 파일 선택
-    if want_hint:
+    if target:
+        # files는 full path 리스트니까 endswith로 매칭
         for f in files:
-            if want_hint in f.lower():
+            if f.replace("\\", "/").endswith("/" + target) or f.endswith(target):
                 return f
-            
-    ds_file = st.session_state.get("ds_file")
-    if ds_file and ds_file in files:
-        return ds_file
 
+        st.session_state["_load_err"] = f"Dataset file not found: {target}"
+        return None
+
+    # culture 없으면 그냥 첫 파일
     return files[0]
+
+
+
+
+    # prof = st.session_state.get("profile") or {}
+    # race = (prof.get("race_ethnicity") or "").lower()
+
+    # want_hint = None
+    # if "african" in race:
+    #     st.session_state["rewrite_target"] = "African American student"
+    #     want_hint = "african"
+    # elif "hispanic" in race:
+    #     st.session_state["rewrite_target"] = "Hispanic college student"
+    #     want_hint = "hispanic"
+    # elif "chinese" in race:
+    #     st.session_state["rewrite_target"] = "Chinese college student"
+    #     want_hint = "chinese"
+    # else:
+    #     st.session_state["rewrite_target"] = st.session_state.get("rewrite_target")
+    #     want_hint = None
+
+    # # 힌트 기반 파일 선택
+    # if want_hint:
+    #     for f in files:
+    #         if want_hint in f.lower():
+    #             return f
+            
+    # ds_file = st.session_state.get("ds_file")
+    # if ds_file and ds_file in files:
+    #     return ds_file
+
+    # return files[0]
 
 
 def _load_random_session() -> bool:
