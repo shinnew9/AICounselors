@@ -2,6 +2,27 @@
 import streamlit as st
 from core_ui.data import DATA_ROOT, list_data_files
 
+
+# 너가 확정한 파일명 매핑
+CULTURE_TO_FILENAME = {
+    "Chinese": "student_only_100.jsonl",
+    "Hispanic": "student_only_rewrite_hispanic_college_grad_100.jsonl",
+    "African American": "student_only_rewrite_african_american_college_grad_100.jsonl",
+}
+
+def _resolve_dataset_file(culture: str) -> str | None:
+    files = list_data_files(DATA_ROOT) or []
+    want = (CULTURE_TO_FILENAME.get(culture) or "").lower()
+    if not want:
+        return None
+    for f in files:
+        if f.lower().endswith(want):
+            return f
+    return None
+
+
+
+
 def _pick_file_for_culture(culture: str, files: list[str]) -> str | None:
     c = (culture or "").lower()
     hints = []
@@ -19,6 +40,7 @@ def _pick_file_for_culture(culture: str, files: list[str]) -> str | None:
             if h in f.lower():
                 return f
     return files[0] if files else None
+
 
 def render():
     st.header("Select dataset")
