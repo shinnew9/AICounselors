@@ -5,7 +5,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import streamlit as st
 
 from core_ui.state import init_state, ensure_global_ui_state
-from pages import culture_select, rate  # ✅ 새로 만들 페이지 2개
+from pages import culture_select, rate
 
 
 def require_lehigh_login():
