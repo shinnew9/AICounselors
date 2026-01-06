@@ -32,7 +32,7 @@ def require_lehigh_login():
                 st.button("Log out", on_click=st.logout)
             st.stop()
 
-        st.session_state["rater_email"] = email
+        st.session_state["logged_in"] = True
 
     else:
         # 2) fallback: 이메일 직접 입력 (Streamlit Cloud에서 auth 설정 없을 때)
@@ -43,7 +43,7 @@ def require_lehigh_login():
             if not email.endswith("@lehigh.edu"):
                 st.error("Lehigh 계정(@lehigh.edu) 이메일만 가능합니다.")
                 st.stop()
-            st.session_state["rater_email"] = email
+            st.session_state["logged_in"] = True
             st.session_state["logged_in_at"] = datetime.now().isoformat(timespec="seconds")
             st.rerun()
 
