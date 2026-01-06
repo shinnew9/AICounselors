@@ -163,4 +163,4 @@ def render():
         return
 
     # 로그인 후: sign-in UI 없음, culture selection만
-    _culture_screen()
+    # _culture_screen()
