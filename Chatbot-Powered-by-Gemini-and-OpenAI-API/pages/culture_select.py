@@ -1,8 +1,9 @@
+# pages/culture_select.py
 import re
 import streamlit as st
 from pathlib import Path
 
-# 여기서는 st.session_state["ds_file"]에 파일명만 넣는 방식으로 처리.
+# data 위치: <repo_root>/data/psydial4
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "psydial4"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@lehigh\.edu$", re.I)
@@ -11,7 +12,7 @@ DATASET_MAP = {
     "Chinese": "student_only_100.jsonl",
     "Hispanic": "student_only_rewrite_hispanic_college_grad_100.jsonl",
     "African American": "student_only_rewrite_african_american_college_grad_100.jsonl",
-    # "Others": (UI만) -> 실제 파일 연결은 나중에
+    # "Others": UI만 (나중에 파일 연결)
 }
 
 
@@ -53,7 +54,6 @@ def _center_css():
             margin-left: 8px;
             opacity: 0.9;
           }
-          .muted { opacity: 0.70; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -61,52 +61,93 @@ def _center_css():
 
 
 def _sidebar_rater():
-    # 로그인 후에만 sidebar 표시
-    if not st.session_state.get("rater_email"):
+    # bugfix: signed_in -> logged_in
+    if not st.session_state.get("logged_in"):
         return
+
+    email = st.session_state.get("rater_email", "")
     st.sidebar.markdown("### Rater")
-    st.sidebar.caption(f"Email: `{st.session_state.get('rater_email','')}`")
-    st.sidebar.text_input(
+    st.sidebar.caption(f"Email: `{email}`")
+
+    default_id = email.split("@")[0] if "@" in email else ""
+    st.session_state.setdefault("rater_id", default_id)
+
+    rid = st.sidebar.text_input(
         "Rater ID (editable)",
-        key="rater_id",
-        value=st.session_state.get("rater_id", ""),
+        value=st.session_state.get("rater_id", default_id),
+        key="sidebar_rater_id",
     )
+    st.session_state["rater_id"] = (rid or default_id).strip()
+
+
+def _login_screen():
+    _center_css()
+
+    st.markdown('<div class="center-wrap"><div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="title">Sign in (Lehigh email)</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="sub">Enter your Lehigh email. You can edit your Rater ID after signing in.</div>',
+        unsafe_allow_html=True,
+    )
+
+    email = st.text_input("Lehigh email", placeholder="yourid@lehigh.edu", key="login_email").strip().lower()
+
+    # @lehigh.edu 없으면 패널(화면)에 경고
+    if email and not email.endswith("@lehigh.edu"):
+        st.warning("Email must end with **@lehigh.edu**.")
+
+    clicked = st.button("Continue", type="primary", use_container_width=False)
+
+    if clicked:
+        if not EMAIL_RE.match(email or ""):
+            st.error("❗ Please enter a valid Lehigh email ending with @lehigh.edu")
+            st.stop()
+
+        st.session_state["logged_in"] = True
+        st.session_state["rater_email"] = email
+        st.session_state["rater_id"] = email.split("@")[0]
+        st.session_state["page"] = "Culture"
+        st.rerun()
+
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
 
 def _culture_screen():
     _sidebar_rater()
 
     st.markdown("## Cultural Counseling Session Rater")
-    st.caption("Select which dataset you want to rate. Sessions will be shown sequentially, and your progress will be saved.")
+    st.caption(
+        "Select which dataset you want to rate. Sessions will be shown sequentially, and your progress will be saved."
+    )
 
-    if st.button(name, use_container_width=True, key=f"btn_{name}"):
-        st.session_state["culture"] = name
-        st.session_state["ds_file"] = str(DATA_DIR / DATASET_MAP[name])
-                 
-
-    # Others 버튼 UI만 추가 (데이터 연결은 안 함)
     cols = st.columns(4)
     choices = ["Chinese", "Hispanic", "African American", "Others"]
+
     for i, name in enumerate(choices):
         with cols[i]:
             if name == "Others":
                 st.button(name, use_container_width=True, disabled=True)
-            else:
-                if st.button(name, use_container_width=True, key=f"btn_{name}"):
-                    st.session_state["culture"] = name
-                    st.session_state["ds_file"] = str(DATA_DIR / DATASET_MAP[name])
+                continue
 
-                    # progress key: rater_id + culture 별로 "몇번째 session"인지 저장할 수 있게
-                    st.session_state.setdefault("progress", {})
-                    pkey = f"{st.session_state.get('rater_id','unknown')}::{name}"
-                    st.session_state["progress"].setdefault(pkey, 1)  # 1부터 시작
+            if st.button(name, use_container_width=True, key=f"btn_{name}"):
+                st.session_state["culture"] = name
 
-                    st.session_state["page"] = "Rate"
-                    st.rerun()
+                # path safe join
+                ds_path = DATA_DIR / DATASET_MAP[name]
+                st.session_state["ds_file"] = str(ds_path)
+
+                # progress: rater_id + culture 별 session index 저장
+                rid = st.session_state.get("rater_id", "unknown")
+                st.session_state.setdefault("progress", {})
+                pkey = f"{rid}::{name}"
+                st.session_state["progress"].setdefault(pkey, 1)  # 1부터 시작
+
+                st.session_state["page"] = "Rate"
+                st.rerun()
 
     st.divider()
 
-    # Current Selection dict(st.json) 제거하고, 사람 읽기 쉬운 텍스트만
+    # Current Selection dict(st.json) 제거 → 텍스트만
     cur = st.session_state.get("culture")
     if cur:
         st.markdown(f"**Current dataset:** {cur} <span class='pill'>selected</span>", unsafe_allow_html=True)
@@ -116,8 +157,10 @@ def _culture_screen():
 
 
 def render():
-    #  로그인은 app.py에서만. 여기서는 rater_email 없으면 막기.
-    if not st.session_state.get("rater_email"):
-        st.error("Please sign in first.")
-        st.stop()
+    # # 로그인 전: 중앙 카드만
+    # if not st.session_state.get("logged_in"):
+    #     _login_screen()
+    #     return
+
+    # 로그인 후: sign-in UI 없음, culture selection만
     _culture_screen()
