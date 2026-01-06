@@ -3,14 +3,14 @@ import streamlit as st
 from pathlib import Path
 
 # 여기서는 st.session_state["ds_file"]에 파일명만 넣는 방식으로 처리.
-DATA_DIR = Path("data/psydial4")
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "psydial4"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@lehigh\.edu$", re.I)
 
 DATASET_MAP = {
-    "Chinese": "student_only_100.jsonl",
-    "Hispanic": "student_only_rewrite_hispanic_college_grad_100.jsonl",
-    "African American": "student_only_rewrite_african_american_college_grad_100.jsonl",
+    "Chinese": "/student_only_100.jsonl",
+    "Hispanic": "/student_only_rewrite_hispanic_college_grad_100.jsonl",
+    "African American": "/student_only_rewrite_african_american_college_grad_100.jsonl",
     # "Others": (UI만) -> 실제 파일 연결은 나중에
 }
 
@@ -61,7 +61,7 @@ def _center_css():
 
 
 def _sidebar_rater():
-    # ✅ 로그인 후에만 sidebar 표시
+    # 로그인 후에만 sidebar 표시
     if not st.session_state.get("logged_in"):
         return
     st.sidebar.markdown("### Rater")

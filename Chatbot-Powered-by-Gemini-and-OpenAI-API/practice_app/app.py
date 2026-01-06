@@ -83,13 +83,9 @@ def main():
     if page == "Culture":
         culture_select.render()
         return
-
-    elif page == "Rate":
+    if page == "Rate":
         rate.render()
         return
-    else:
-        st.session_state["page"] = "Culture"
-        st.rerun()
     
     # fallback
     st.session_state["page"] = "Culture"
