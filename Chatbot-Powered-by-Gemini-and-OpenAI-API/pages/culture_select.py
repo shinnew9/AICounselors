@@ -157,10 +157,10 @@ def _culture_screen():
 
 
 def render():
-    # # 로그인 전: 중앙 카드만
-    # if not st.session_state.get("logged_in"):
-    #     _login_screen()
-    #     return
+    # 로그인 전: 중앙 카드만
+    if not st.session_state.get("logged_in"):
+        _login_screen()
+        return
 
     # 로그인 후: sign-in UI 없음, culture selection만
     _culture_screen()
