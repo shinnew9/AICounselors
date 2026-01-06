@@ -1,11 +1,11 @@
 import streamlit as st
 
-CULTURE_BADGES = {
-    "Chinese": "🀄",
-    "Hispanic": "🪇",
-    "African American": "🎤",
-    "Others": "🌍",
-}
+# CULTURE_BADGES = {
+#     "Chinese": "🀄",
+#     "Hispanic": "🪇",
+#     "African American": "🎤",
+#     "Others": "🌍",
+# }
 
 
 def _inject_chat_css():
@@ -19,7 +19,7 @@ def _inject_chat_css():
         .msg-row.right { justify-content: flex-end; }
 
         .bubble {
-            max-width: min(760px, 78%);
+            max-width: min(750px, 75%);
             padding: 10px 12px;
             border-radius: 16px;
             line-height: 1.35;
@@ -52,7 +52,7 @@ def _inject_chat_css():
 
 def render_chat(turns, culture: str = "Others"):
     _inject_chat_css()
-    badge = CULTURE_BADGES.get(culture, "🌍")
+    # badge = CULTURE_BADGES.get(culture, "🌍")
 
     st.markdown('<div class="chat-wrap">', unsafe_allow_html=True)
 
@@ -61,7 +61,7 @@ def render_chat(turns, culture: str = "Others"):
         text = t.get("text") or ""
 
         if speaker == "client":
-            who = f'{badge} Client'
+            who = 'Client'
             row_cls = "left"
             bubble_cls = "left"
         else:
