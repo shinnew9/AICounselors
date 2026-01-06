@@ -84,41 +84,16 @@ def main():
         culture_select.render()
         return
 
-    if page == "Rate":
+    elif page == "Rate":
         rate.render()
         return
+    else:
+        st.session_state["page"] = "Culture"
+        st.rerun()
     
     # fallback
     st.session_state["page"] = "Culture"
     st.rerun()
-
-    # _ensure_rater_id()
-
-    # # Sidebar: rater id
-    # with st.sidebar:
-    #     st.markdown("### Rater")
-    #     st.caption(f"Email: `{st.session_state.get('rater_email','')}`")
-    #     st.session_state["rater_id"] = st.text_input(
-    #         "Rater ID",
-    #         value=st.session_state.get("rater_id", ""),
-    #         help="Default is your Lehigh id (email before @). You can edit if needed.",
-    #     ).strip()
-
-    #     st.divider()
-    #     if st.button("Log out", use_container_width=True):
-    #         st.logout()
-
-    # # Simple top nav
-    # st.session_state.setdefault("page", "Culture")
-
-    # tabs = st.radio("", ["Culture", "Rate"], horizontal=True, index=0 if st.session_state["page"] == "Culture" else 1)
-    # st.session_state["page"] = tabs
-
-    # if tabs == "Culture":
-    #     culture_select.render()
-    # else:
-    #     rate.render()
-
 
 if __name__ == "__main__":
     main()
