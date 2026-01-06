@@ -116,6 +116,21 @@ def sidebar_profile():
         st.rerun()
 
 
+def sidebar_rater_panel():
+    st.sidebar.markdown("## Rater")
+    st.sidebar.caption("Email")
+    st.sidebar.write(st.session_state.get("email",""))
+
+    st.sidebar.caption("Rater ID (editable)")
+    rid = st.sidebar.text_input(" ", value=st.session_state.get("rater_id",""), label_visibility="collapsed")
+    st.session_state["rater_id"] = rid.strip()
+
+    if st.sidebar.button("Sign out"):
+        for k in ["email","rater_id","culture","ds_file","session_idx","current_session"]:
+            st.session_state.pop(k, None)
+        st.switch_page("app.py")
+
+
 def main():
     # Gate: Sign-in first
     if not render_signin_gate():
