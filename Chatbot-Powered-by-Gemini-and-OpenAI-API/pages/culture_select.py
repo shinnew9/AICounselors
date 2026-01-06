@@ -1,166 +1,223 @@
-# pages/culture_select.py
-import re
+import json
+import os
+import random
 import streamlit as st
-from pathlib import Path
 
-# data 위치: <repo_root>/data/psydial4
-DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "psydial4"
+st.set_page_config(
+    page_title="Cultural Counseling Session Rater",
+    page_icon="🧠",
+    layout="wide",
+)
 
-EMAIL_RE = re.compile(r"^[^@\s]+@lehigh\.edu$", re.I)
 
-DATASET_MAP = {
-    "Chinese": "student_only_100.jsonl",
-    "Hispanic": "student_only_rewrite_hispanic_college_grad_100.jsonl",
-    "African American": "student_only_rewrite_african_american_college_grad_100.jsonl",
-    # "Others": UI만 (나중에 파일 연결)
+# CONFIG (EDIT THESE PATHS)
+# 문화별 jsonl 파일 경로
+DATASET_FILES = {
+    "Chinese": "C:\Users\user\workspaces\vscodeprojects\AICounselors\Chatbot-Powered-by-Gemini-and-OpenAI-API\data\psydial4\student_only_100.jsonl",
+    "Hispanic": "C:\Users\user\workspaces\vscodeprojects\AICounselors\Chatbot-Powered-by-Gemini-and-OpenAI-API\data\psydial4\student_only_rewrite_hispanic_college_grad_100.jsonl",
+    "African American": "C:\Users\user\workspaces\vscodeprojects\AICounselors\Chatbot-Powered-by-Gemini-and-OpenAI-API\data\psydial4\student_only_rewrite_african_american_college_grad_100.jsonl",
+    "Others": None  # UI only for now
 }
 
 
-def _center_css():
-    st.markdown(
-        """
-        <style>
-          .center-wrap {
-            min-height: 72vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          }
-          .card {
-            width: 100%;
-            max-width: 720px;
-            padding: 28px 26px;
-            border-radius: 20px;
-            background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.10);
-          }
-          .title {
-            font-size: 2.0rem;
-            font-weight: 800;
-            margin-bottom: 0.25rem;
-          }
-          .sub {
-            opacity: 0.75;
-            margin-bottom: 1.2rem;
-          }
-          .btnrow > div { padding-top: 0.25rem; }
-          .pill {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 999px;
-            font-size: 0.85rem;
-            background: rgba(255,255,255,0.08);
-            border: 1px solid rgba(255,255,255,0.10);
-            margin-left: 8px;
-            opacity: 0.9;
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+# UI: Global CSS
+st.markdown(
+    """
+    <style>
+    .block-container { padding-top: 1.5rem; }
+
+    /* Optional: hide default Streamlit menu/footer */
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+
+    /* Make buttons look a bit more consistent */
+    div.stButton > button {
+        border-radius: 12px;
+        padding: 0.55rem 0.85rem;
+        font-weight: 700;
+    }
+
+    /* Headline spacing */
+    .page-title {
+        font-size: 42px;
+        font-weight: 900;
+        margin: 0.2rem 0 0.2rem 0;
+    }
+    .page-sub {
+        opacity: 0.75;
+        margin-bottom: 1.2rem;
+    }
+
+    /* Hide "Current selection dict" area is removed already */
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
-def _sidebar_rater():
-    # bugfix: signed_in -> logged_in
-    if not st.session_state.get("logged_in"):
-        return
 
-    email = st.session_state.get("rater_email", "")
-    st.sidebar.markdown("### Rater")
-    st.sidebar.caption(f"Email: `{email}`")
-
-    default_id = email.split("@")[0] if "@" in email else ""
-    st.session_state.setdefault("rater_id", default_id)
-
-    rid = st.sidebar.text_input(
-        "Rater ID (editable)",
-        value=st.session_state.get("rater_id", default_id),
-        key="sidebar_rater_id",
-    )
-    st.session_state["rater_id"] = (rid or default_id).strip()
+# Helpers: Auth
+def require_signed_in():
+    if not st.session_state.get("email"):
+        st.error("You must sign in first. Please return to the home page.")
+        st.stop()
 
 
-def _login_screen():
-    _center_css()
+# Helpers: Data loading
+def load_jsonl(path: str):
+    if not os.path.exists(path):
+        st.error(f"Dataset file not found: {path}")
+        st.stop()
 
-    st.markdown('<div class="center-wrap"><div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="title">Sign in (Lehigh email)</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sub">Enter your Lehigh email. You can edit your Rater ID after signing in.</div>',
-        unsafe_allow_html=True,
-    )
-
-    email = st.text_input("Lehigh email", placeholder="yourid@lehigh.edu", key="login_email").strip().lower()
-
-    # @lehigh.edu 없으면 패널(화면)에 경고
-    if email and not email.endswith("@lehigh.edu"):
-        st.warning("Email must end with **@lehigh.edu**.")
-
-    clicked = st.button("Continue", type="primary", use_container_width=False)
-
-    if clicked:
-        if not EMAIL_RE.match(email or ""):
-            st.error("❗ Please enter a valid Lehigh email ending with @lehigh.edu")
-            st.stop()
-
-        st.session_state["logged_in"] = True
-        st.session_state["rater_email"] = email
-        st.session_state["rater_id"] = email.split("@")[0]
-        st.session_state["page"] = "Culture"
-        st.rerun()
-
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-
-def _culture_screen():
-    _sidebar_rater()
-
-    st.markdown("## Cultural Counseling Session Rater")
-    st.caption(
-        "Select which dataset you want to rate. Sessions will be shown sequentially, and your progress will be saved."
-    )
-
-    cols = st.columns(4)
-    choices = ["Chinese", "Hispanic", "African American", "Others"]
-
-    for i, name in enumerate(choices):
-        with cols[i]:
-            if name == "Others":
-                st.button(name, use_container_width=True, disabled=True)
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
                 continue
-
-            if st.button(name, use_container_width=True, key=f"btn_{name}"):
-                st.session_state["culture"] = name
-
-                # path safe join
-                ds_path = DATA_DIR / DATASET_MAP[name]
-                st.session_state["ds_file"] = str(ds_path)
-
-                # progress: rater_id + culture 별 session index 저장
-                rid = st.session_state.get("rater_id", "unknown")
-                st.session_state.setdefault("progress", {})
-                pkey = f"{rid}::{name}"
-                st.session_state["progress"].setdefault(pkey, 1)  # 1부터 시작
-
-                st.session_state["page"] = "Rate"
-                st.rerun()
-
-    st.divider()
-
-    # Current Selection dict(st.json) 제거 → 텍스트만
-    cur = st.session_state.get("culture")
-    if cur:
-        st.markdown(f"**Current dataset:** {cur} <span class='pill'>selected</span>", unsafe_allow_html=True)
-        st.caption(f"File: `{st.session_state.get('ds_file','')}`")
-    else:
-        st.caption("No dataset selected yet.")
+            rows.append(json.loads(line))
+    return rows
 
 
-def render():
-    # 로그인 전: 중앙 카드만
-    if not st.session_state.get("logged_in"):
-        _login_screen()
-        return
+def parse_session(raw: dict):
+    """
+    Normalize a session into:
+    {
+      "session_id": str,
+      "turns": [{"speaker": "client"/"counselor", "text": "..."} ...]
+    }
 
-    # 로그인 후: sign-in UI 없음, culture selection만
-    # _culture_screen()
+    You MUST edit this function if your dataset schema differs.
+    """
+    # Common possibilities:
+    # 1) {"session_id": "...", "turns":[{"speaker":"client","text":"..."}]}
+    # 2) {"id": "...", "dialogue":[{"role":"user","content":"..."}]}
+    sid = raw.get("session_id") or raw.get("id") or raw.get("sid") or str(raw.get("index", "")) or "unknown"
+
+    turns = raw.get("turns") or raw.get("dialogue") or raw.get("messages") or []
+    norm_turns = []
+
+    for t in turns:
+        speaker = (t.get("speaker") or t.get("role") or "").lower()
+        text = t.get("text") or t.get("content") or t.get("utterance") or ""
+
+        if speaker in ["client", "patient", "seeker", "user", "human"]:
+            norm_turns.append({"speaker": "client", "text": text})
+        else:
+            # counselor/assistant/therapist/etc
+            norm_turns.append({"speaker": "counselor", "text": text})
+
+    return {"session_id": sid, "turns": norm_turns}
+
+
+def get_sessions_for_culture(culture: str):
+    path = DATASET_FILES.get(culture)
+    if not path:
+        st.error("This dataset is not configured yet.")
+        st.stop()
+
+    raw_rows = load_jsonl(path)
+    sessions = [parse_session(r) for r in raw_rows]
+    if not sessions:
+        st.error("No sessions found in the dataset.")
+        st.stop()
+    return sessions
+
+
+# Helpers: Chat rendering
+def render_chat(turns):
+    for t in turns:
+        speaker = t.get("speaker", "")
+        text = t.get("text", "")
+
+        if speaker == "client":
+            with st.chat_message("user", avatar="🧑‍💬"):
+                st.markdown(text)
+        else:
+            with st.chat_message("assistant", avatar="🧑‍⚕️"):
+                st.markdown(text)
+
+
+# Main page
+def main():
+    require_signed_in()
+
+    st.markdown('<div class="page-title">🧠 Cultural Counseling Session Rater</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="page-sub">Choose a dataset to rate. You will rate sessions sequentially and your progress can be saved.</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Dataset selection buttons (+ Others UI only)
+    st.markdown("## Select dataset")
+    cols = st.columns(4)
+    options = ["Chinese", "Hispanic", "African American", "Others"]
+
+    for i, opt in enumerate(options):
+        with cols[i]:
+            if opt == "Others":
+                st.button(opt, disabled=True, use_container_width=True)
+            else:
+                if st.button(opt, use_container_width=True):
+                    st.session_state["culture"] = opt
+                    st.session_state["ds_file"] = DATASET_FILES.get(opt)
+                    # reset session state when switching datasets
+                    st.session_state["session_idx"] = 0
+                    st.session_state["current_session"] = None
+                    st.rerun()
+
+    # Remove dict UI -> show a simple status line
+    culture = st.session_state.get("culture")
+    if not culture:
+        st.info("No dataset selected yet.")
+        st.stop()
+
+    st.success(f"Current dataset: {culture}")
+
+    # Load sessions (cached in session_state to avoid reloading every rerun)
+    if st.session_state.get("current_session") is None:
+        sessions = get_sessions_for_culture(culture)
+        st.session_state["_sessions_cache"] = sessions
+        st.session_state["current_session"] = sessions[st.session_state.get("session_idx", 0)]
+
+    sessions = st.session_state.get("_sessions_cache") or get_sessions_for_culture(culture)
+    session_idx = int(st.session_state.get("session_idx", 0))
+
+    # Guard
+    session_idx = max(0, min(session_idx, len(sessions) - 1))
+    st.session_state["session_idx"] = session_idx
+    session = sessions[session_idx]
+    st.session_state["current_session"] = session
+
+    # Session header
+    st.markdown("---")
+    st.subheader(f"Session {session_idx + 1} / {len(sessions)}")
+    st.caption(f"Session ID: {session.get('session_id', 'unknown')}")
+
+    # Render chat bubbles
+    render_chat(session.get("turns", []))
+
+    # Navigation
+    st.markdown("---")
+    nav_cols = st.columns([1, 1, 3])
+    with nav_cols[0]:
+        prev_disabled = session_idx <= 0
+        if st.button("← Previous", disabled=prev_disabled, use_container_width=True):
+            st.session_state["session_idx"] = session_idx - 1
+            st.session_state["current_session"] = None
+            st.rerun()
+
+    with nav_cols[1]:
+        next_disabled = session_idx >= len(sessions) - 1
+        if st.button("Next →", disabled=next_disabled, use_container_width=True):
+            st.session_state["session_idx"] = session_idx + 1
+            st.session_state["current_session"] = None
+            st.rerun()
+
+    # Rating section: you said stop at (1)(2), so keep minimal placeholder
+    st.markdown("## Ratings (placeholder)")
+    st.info("We will finalize the A/B perspective metrics later. For now, the UI and chat rendering are updated.")
+
+
+if __name__ == "__main__":
+    main()
