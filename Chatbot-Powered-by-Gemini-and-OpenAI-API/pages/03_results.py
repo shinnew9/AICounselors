@@ -1,27 +1,121 @@
 import streamlit as st
+
 from core_ui.layout import set_base_page_config, inject_base_css
 from core_ui.auth import require_signed_in
+from core_ui.dataset import get_sessions_for_culture
+from core.logs_assess import (
+    read_assess_rows,
+    filter_rows,
+    rated_session_ids,
+    latest_rows_per_session,
+    METRIC_FIELDS,
+)
 
 set_base_page_config()
 inject_base_css()
 
+
+def _safe_float(x):
+    try:
+        return float(x)
+    except Exception:
+        return None
+
+
 def main():
     require_signed_in()
 
-    st.markdown("## 03 — Results")
-    st.info("Results page placeholder. We'll add aggregated metrics/export later.")
-
     culture = st.session_state.get("culture")
-    idx = st.session_state.get("session_idx", 0)
-    st.write({"culture": culture, "session_idx": idx})
+    if not culture:
+        st.warning("Please select a dataset first.")
+        st.switch_page("pages/01_Dataset_Select.py")
 
-    cols = st.columns([1, 1, 2])
-    with cols[0]:
-        if st.button("← Back to Access", use_container_width=True):
+    rater_id = st.session_state.get("rater_id", "").strip()
+    st.markdown("## Results")
+    st.caption(f"Rater: {rater_id}, \nCulture: {culture}")
+
+    # Total sessions for progress
+    sessions = get_sessions_for_culture(culture)
+    total = len(sessions)
+
+    rows = read_assess_rows()
+    my_rows = filter_rows(rows, rater_id=rater_id, culture=culture)
+    done_ids = rated_session_ids(rows, rater_id=rater_id, culture=culture)
+    done = len(done_ids)
+
+    st.metric("Completed (unique sessions rated at least once)", f"{done} / {total}")
+
+    use_latest = st.checkbox("Use latest rating per session for summary stats", value=True)
+    if use_latest:
+        latest_map = latest_rows_per_session(my_rows)
+        summary_rows = list(latest_map.values())
+    else:
+        summary_rows = my_rows
+
+    # Compute means
+    means = {}
+    for m in METRIC_FIELDS:
+        vals = []
+        for r in summary_rows:
+            v = _safe_float(r.get(m, ""))
+            if v is not None:
+                vals.append(v)
+        means[m] = (sum(vals) / len(vals)) if vals else None
+
+    st.markdown("### Summary (means)")
+
+    labels = [
+        ("Empathy / Warmth", "empathy_warmth"),
+        ("Clarity / Helpfulness", "clarity_helpfulness"),
+        ("Safety / Non-judgment", "safety_nonjudgment"),
+        ("Cultural Appropriateness", "cultural_appropriateness"),
+        ("Specificity (not stereotypical)", "specificity_nostereotype"),
+        ("Maintains Original Meaning", "meaning_preserve"),
+    ]
+
+    # display in 3 columns (2 rows)
+    c1, c2, c3 = st.columns(3)
+    cols = [c1, c2, c3]
+
+    for i, (label, key) in enumerate(labels):
+        v = means.get(key)
+        display = "—" if v is None else f"{v:.2f}"
+    with cols[i % 3]:
+        st.metric(label, display)
+
+    st.caption("Means computed from your saved ratings. Toggle 'Use latest rating per session' to control history vs latest.")
+
+    st.markdown("---")
+    st.markdown("### Your saved rows")
+    st.caption("Policy: every submission is appended (history preserved).")
+
+    # Show compact table (newest first)
+    my_rows_sorted = sorted(my_rows, key=lambda r: r.get("timestamp_utc", ""), reverse=True)
+    
+    keep_cols = [
+        "timestamp_utc",
+        "session_id",
+        "empathy_warmth",
+        "clarity_helpfulness",
+        "safety_nonjudgment",
+        "cultural_appropriateness",
+        "specificity_nostereotype",
+        "meaning_preserve",
+        "comment",
+    ]
+
+    compact = [{k: row.get(k, "") for k in keep_cols} for row in my_rows_sorted]
+    st.dataframe(compact, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    nav = st.columns([1, 1, 2])
+    with nav[0]:
+        if st.button("← Back to assess", use_container_width=True):
             st.switch_page("pages/02_Assess.py")
-    with cols[1]:
-        if st.button("Back to cultural dataset select", use_container_width=True):
+    with nav[1]:
+        if st.button("Back to dataset select", use_container_width=True):
             st.switch_page("pages/01_Dataset.py")
+
 
 if __name__ == "__main__":
     main()
