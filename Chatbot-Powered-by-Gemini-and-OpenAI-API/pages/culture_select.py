@@ -8,9 +8,9 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "psydial4"
 EMAIL_RE = re.compile(r"^[^@\s]+@lehigh\.edu$", re.I)
 
 DATASET_MAP = {
-    "Chinese": "/student_only_100.jsonl",
-    "Hispanic": "/student_only_rewrite_hispanic_college_grad_100.jsonl",
-    "African American": "/student_only_rewrite_african_american_college_grad_100.jsonl",
+    "Chinese": "student_only_100.jsonl",
+    "Hispanic": "student_only_rewrite_hispanic_college_grad_100.jsonl",
+    "African American": "student_only_rewrite_african_american_college_grad_100.jsonl",
     # "Others": (UI만) -> 실제 파일 연결은 나중에
 }
 
@@ -62,7 +62,7 @@ def _center_css():
 
 def _sidebar_rater():
     # 로그인 후에만 sidebar 표시
-    if not st.session_state.get("logged_in"):
+    if not st.session_state.get("rater_email"):
         return
     st.sidebar.markdown("### Rater")
     st.sidebar.caption(f"Email: `{st.session_state.get('rater_email','')}`")
@@ -73,41 +73,16 @@ def _sidebar_rater():
     )
 
 
-def _login_screen():
-    _center_css()
-    st.markdown('<div class="center-wrap"><div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="title">Sign in (Lehigh email)</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sub">Enter your Lehigh email. You can edit your Rater ID after signing in.</div>',
-        unsafe_allow_html=True,
-    )
-
-    email = st.text_input("Lehigh email", placeholder="yourid@lehigh.edu", key="login_email")
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        clicked = st.button("Continue", type="primary", use_container_width=True)
-
-    if clicked:
-        email_norm = (email or "").strip().lower()
-        if not EMAIL_RE.match(email_norm):
-            st.error("❗ Please enter a valid Lehigh email ending with @lehigh.edu")
-            st.stop()
-
-        # rater_email / rater_id 세팅
-        st.session_state["logged_in"] = True
-        st.session_state["rater_email"] = email_norm
-        st.session_state["rater_id"] = email_norm.split("@")[0]  # 기본: @ 앞부분
-        st.session_state["page"] = "Culture"
-        st.rerun()
-
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-
 def _culture_screen():
     _sidebar_rater()
 
     st.markdown("## Cultural Counseling Session Rater")
     st.caption("Select which dataset you want to rate. Sessions will be shown sequentially, and your progress will be saved.")
+
+    if st.button(name, use_container_width=True, key=f"btn_{name}"):
+        st.session_state["culture"] = name
+        st.session_state["ds_file"] = str(DATA_DIR / DATASET_MAP[name])
+                 
 
     # Others 버튼 UI만 추가 (데이터 연결은 안 함)
     cols = st.columns(4)
@@ -141,10 +116,8 @@ def _culture_screen():
 
 
 def render():
-    # 로그인 전에는 중앙 카드만 보이게
-    if not st.session_state.get("logged_in"):
-        _login_screen()
-        return
-
-    # 로그인 후에는 Sign in UI 없애고 바로 culture selection만 보이게
+    #  로그인은 app.py에서만. 여기서는 rater_email 없으면 막기.
+    if not st.session_state.get("rater_email"):
+        st.error("Please sign in first.")
+        st.stop()
     _culture_screen()
