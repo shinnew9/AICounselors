@@ -1,47 +1,58 @@
+import re
 import streamlit as st
 
 LEHIGH_DOMAIN = "@lehigh.edu"
+LEHIGH_ID_PATTERN = re.compile(r"^[a-z]{3}\d{3}@lehigh\.edu$")
 
 
 def lehigh_email_valid(email: str) -> bool:
     if not email:
         return False
     email = email.strip().lower()
-    # 가장 안전한 규칙: @lehigh.edu 끝 + 공백 없음 + @ 포함
-    return email.endswith(LEHIGH_DOMAIN) and ("@" in email) and (" " not in email)
+    return bool(LEHIGH_ID_PATTERN.match(email))
 
 
 def render_signin_gate() -> bool:
-    """
-    로그인 안 되어 있으면 중앙 카드 렌더링 후 False 반환.
-    로그인 완료 상태면 True 반환.
-    """
     if st.session_state.get("email"):
         return True
 
-    st.markdown('<div class="center-wrap"><div class="signin-card">', unsafe_allow_html=True)
-    st.markdown('<div class="signin-title">Welcome</div>', unsafe_allow_html=True)
-    st.markdown('<div class="signin-sub">Sign in with your Lehigh email to continue.</div>', unsafe_allow_html=True)
+    # 가운데 정렬 + 폭 제한 (HTML div 쓰지 말고 columns로!)
+    left, mid, right = st.columns([1.2, 2.2, 1.2])
+    with mid:
+        # Two spacers 
+        st.write("")
+        st.write("")
+        st.write("")
+        
+        st.markdown("## Welcome")
+        st.caption("Sign in with your Lehigh email to continue.")
 
-    with st.form("signin_form", clear_on_submit=False):
-        email = st.text_input("Lehigh email", placeholder=f"yourid{LEHIGH_DOMAIN}")
-        submitted = st.form_submit_button("Continue")
+        with st.form("signin_form", clear_on_submit=False):
+            email_raw = st.text_input(
+                "Lehigh email",
+                placeholder="abc123@lehigh.edu",
+                help="Format must be exactly: 3 lowercase letters + 3 digits + @lehigh.edu (e.g., abc123@lehigh.edu)",
+            )
 
-        if submitted:
-            if not lehigh_email_valid(email):
-                msg = f"Please enter a valid Lehigh email ending with {LEHIGH_DOMAIN}"
-                st.error(msg)
-                st.sidebar.error(msg)
-                st.markdown("</div></div>", unsafe_allow_html=True)
-                return False
+            submitted = st.form_submit_button("Continue")
 
-            email = email.strip().lower()
-            st.session_state["email"] = email
-            st.session_state["rater_id"] = st.session_state.get("rater_id") or email.split("@")[0]
-            st.session_state["signed_in"] = True
-            st.rerun()
+            if submitted:
+                email = (email_raw or "").strip()
 
-    st.markdown("</div></div>", unsafe_allow_html=True)
+                # 대문자 입력도 실패시키고 싶으면 이 줄 유지 (원치 않으면 삭제)
+                if email != email.lower():
+                    st.error("Use lowercase only (e.g., abc123@lehigh.edu).")
+                    return False
+
+                if not lehigh_email_valid(email):
+                    st.error("Invalid email. Use exactly: abc123@lehigh.edu (3 lowercase letters + 3 digits).")
+                    return False
+
+                st.session_state["email"] = email
+                st.session_state["rater_id"] = st.session_state.get("rater_id") or email.split("@")[0]
+                st.session_state["signed_in"] = True
+                st.rerun()
+
     return False
 
 
