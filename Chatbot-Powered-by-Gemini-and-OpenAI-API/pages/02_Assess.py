@@ -230,7 +230,7 @@ def main():
             st.switch_page("pages/01_Dataset.py")
     with nav[3]:
         if st.button("Go to results →", use_container_width=True):
-            st.switch_page("pages/03_Results.py")
+            st.switch_page("pages/03_results.py")
 
 
 
