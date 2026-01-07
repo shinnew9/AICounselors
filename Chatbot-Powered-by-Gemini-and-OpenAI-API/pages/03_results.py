@@ -1,6 +1,6 @@
 import streamlit as st
 
-from core_ui.layout import set_base_page_config, inject_base_css
+from core_ui.layout import set_base_page_config, inject_base_css, render_top_right_signout
 from core_ui.auth import require_signed_in
 from core_ui.dataset import get_sessions_for_culture
 from core.logs_assess import (
@@ -24,11 +24,12 @@ def _safe_float(x):
 
 def main():
     require_signed_in()
+    render_top_right_signout(key="signout_assess")
 
     culture = st.session_state.get("culture")
     if not culture:
         st.warning("Please select a dataset first.")
-        st.switch_page("pages/01_Dataset_Select.py")
+        st.switch_page("pages/01_Dataset.py")
 
     rater_id = st.session_state.get("rater_id", "").strip()
     st.markdown("## Results")
