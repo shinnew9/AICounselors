@@ -83,3 +83,21 @@ def render_app_header():
         '<div class="page-sub">A culturally adaptive companion for your mental wellness journey.</div>',
         unsafe_allow_html=True,
     )
+
+
+def render_top_right_signout(key: str = "signout_top"):
+    """
+    Top-right sign out button (shows only when signed in).
+    Place this near the top of each page (Dataset/Assess/Results).
+    """
+    if not st.session_state.get("email"):
+        return  # not signed in -> don't show
+
+    # Right-aligned row
+    _, col = st.columns([8, 1])
+    with col:
+        # Slightly compact button
+        if st.button("Sign out", key=key, use_container_width=True):
+            # lazy import to avoid circular imports
+            from core_ui.auth import sign_out_to_home
+            sign_out_to_home()

@@ -1,6 +1,6 @@
 import streamlit as st
 
-from core_ui.layout import set_base_page_config, inject_base_css
+from core_ui.layout import set_base_page_config, inject_base_css, render_top_right_signout
 from core_ui.auth import require_signed_in
 from core_ui.dataset import get_sessions_for_culture, DATASET_FILES
 from core_ui.chat_view import render_chat
@@ -80,6 +80,7 @@ def _ensure_resume_pointer(sessions, rater_id: str, culture: str):
 
 def main():
     require_signed_in()
+    render_top_right_signout(key="signout_assess")
 
     st.markdown('<div id="TOP"></div>', unsafe_allow_html=True)
 
