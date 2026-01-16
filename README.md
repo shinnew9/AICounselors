@@ -1,31 +1,33 @@
-## Acknowledgments
-- Base app: bhargavi852004/Chatbot-Powered-by-Gemini-and-OpenAI-API (accessed Sep 2025).
-<br>
-Additions by Yoojin Shin: CARE-style patient simulation, structured feedback engine, safety notice, logs/metrics, Streamlit UI extensions. <br>
-Research project supervised by Prof.Chuah
-
-
 # CCCARE
 **A Web-Based Dataset Evaluation Interface**
   A lightweight web application for hosting datasets and enabling structured human evaluation through a browser-based interface.
 
+> **TL;DR**  
+> CCCARE is a lightweight Streamlit app that hosts datasets on the web
+> and enables structured human evaluation without modifying the original data.
+
+
 </br>
 
 ## Why I Built This
-During the winter break at Lehigh University (late December of 2025 to early January 2026), I wanted to explore how datasets could be made more usable and interactive beyond static files.
+During the winter break at Lehigh University (late December of 2025 to early January 2026), I wanted to explore how datasets could be made **more usable and interactive** beyond static files.
 
-The project initially started with the idea of building an interactive interface, but quickly evolved into something more concrete and useful: **a web-based platform for reviewing and scoring dataset entries.**
+**This project was driven by three questions:**
+- How can datasets be reviewed without opening raw files?
+- How can human evaluation be made more consistent?
+- Does every data-facing system need a chat interface?
 
-Rather than building a chat-based application, I focused on designing an interface that supports **structured human judgment.**
+CCCARE evolved into a **dataset-first evaluation platform**, focusing on structured scoring
+rather than conversational interaction.
 
 
 ## What This Project Is (and Is Not)
-This project is:
+**This project is:**
 - A web application that displays dataset entries
 - A structured interface for scoring and evaluating data
 - A foundation for human-in-the-loop evaluation workflows
 
-This project is not:
+**This project is not:**
 - A chatbot
 - A conversational AI interface
 - A generation-focused application
@@ -38,6 +40,7 @@ By placing the dataset inside a web interface and guiding users through evaluati
 this project explores how **interface design can improve data quality and usability.**
 
 ## How It Works 
+
 - Dataset entries are loaded and rendered dynamically on a web page
 - Users can browse individual data samples
 - Each entry can be scored or evaluated through predefined input components
