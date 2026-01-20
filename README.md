@@ -97,7 +97,7 @@ This separation keeps the dataset immutable while allowing flexible evaluation l
   - JSON-based dataset handling
 
 ## Screenshots
-(Main page screenshots will be added to illustrate the dataset view and evaluation interface.)
+<img width="2880" height="1546" alt="Image" src="https://github.com/user-attachments/assets/de8deda8-2e02-461f-85d2-54be94306e75" />(Main page screenshots will be added to illustrate the dataset view and evaluation interface.)
 
 
 
