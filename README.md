@@ -103,4 +103,4 @@ This separation keeps the dataset immutable while allowing flexible evaluation l
 
 
 ## 🚀 Live Demo
-Try the app here: [<URLS are open, but not updated here yet>](https://cccare.streamlit.app/)
+Try the app here: [CCCAE](https://cccare.streamlit.app/)
